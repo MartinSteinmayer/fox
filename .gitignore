@@ -1,0 +1,27 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# Voice server build artifacts
+voice-server/whisper.cpp/
+voice-server/models/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Env files
+.env
+.env.local

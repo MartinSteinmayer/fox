@@ -1,0 +1,67 @@
+{
+  "manifest_version": 2,
+  "name": "Tab Whisperer",
+  "version": "0.1.0",
+  "description": "Voice & text-powered browser assistant that organizes your tabs with AI.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "tab-whisperer@hackathon",
+      "strict_min_version": "142.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png"
+  },
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "storage",
+    "notifications",
+    "search",
+    "bookmarks",
+    "history",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "tools/tab-tools.js",
+      "tools/search-tools.js",
+      "tools/report-tools.js",
+      "tools/automation-tools.js",
+      "tools/registry.js",
+      "lib/llm-client.js",
+      "lib/tool-executor.js",
+      "background.js"
+    ]
+  },
+  "browser_action": {
+    "default_icon": {
+      "48": "icons/icon-48.png"
+    },
+    "default_title": "Tab Whisperer",
+    "default_popup": "popup/popup.html"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "commands": {
+    "toggle-listening": {
+      "suggested_key": {
+        "default": "Alt+Shift+L",
+        "mac": "Alt+Shift+L"
+      },
+      "description": "Toggle voice listening"
+    },
+    "_execute_browser_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+T",
+        "mac": "Alt+Shift+T"
+      }
+    }
+  }
+}

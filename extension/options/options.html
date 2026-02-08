@@ -1,0 +1,300 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Tab Whisperer — Settings</title>
+    <style>
+      :root {
+        --bg: #1a1b2e;
+        --bg-secondary: #232440;
+        --bg-tertiary: #2a2b4a;
+        --text: #e2e4f0;
+        --text-muted: #8b8da8;
+        --accent: #6366f1;
+        --accent-hover: #818cf8;
+        --green: #22c55e;
+        --red: #ef4444;
+        --border: #333560;
+        --radius: 8px;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        padding: 40px;
+        max-width: 600px;
+        margin: 0 auto;
+        line-height: 1.6;
+      }
+
+      h1 {
+        font-size: 24px;
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      h1 img {
+        width: 32px;
+        height: 32px;
+      }
+
+      .subtitle {
+        color: var(--text-muted);
+        font-size: 14px;
+        margin-bottom: 32px;
+      }
+
+      .section {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 20px;
+        margin-bottom: 20px;
+      }
+
+      .section h2 {
+        font-size: 16px;
+        margin-bottom: 16px;
+        color: var(--text);
+      }
+
+      .field {
+        margin-bottom: 16px;
+      }
+
+      .field:last-child {
+        margin-bottom: 0;
+      }
+
+      label {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-muted);
+        margin-bottom: 4px;
+      }
+
+      label .hint {
+        font-weight: 400;
+        font-size: 11px;
+        opacity: 0.7;
+      }
+
+      input[type="text"],
+      input[type="password"],
+      input[type="number"],
+      select {
+        width: 100%;
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 8px 12px;
+        border-radius: var(--radius);
+        font-size: 13px;
+        font-family: inherit;
+        outline: none;
+      }
+
+      input:focus,
+      select:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+      }
+
+      select {
+        cursor: pointer;
+      }
+
+      .row {
+        display: flex;
+        gap: 12px;
+      }
+
+      .row .field {
+        flex: 1;
+      }
+
+      .btn-row {
+        display: flex;
+        gap: 12px;
+        margin-top: 24px;
+      }
+
+      button {
+        background: var(--accent);
+        color: white;
+        border: none;
+        padding: 10px 24px;
+        border-radius: var(--radius);
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        font-family: inherit;
+      }
+
+      button:hover {
+        background: var(--accent-hover);
+      }
+
+      button.secondary {
+        background: var(--bg-tertiary);
+        color: var(--text-muted);
+      }
+
+      button.secondary:hover {
+        background: var(--border);
+        color: var(--text);
+      }
+
+      #status-message {
+        margin-top: 16px;
+        padding: 8px 14px;
+        border-radius: var(--radius);
+        font-size: 13px;
+        display: none;
+      }
+
+      #status-message.success {
+        display: block;
+        background: #052e16;
+        color: var(--green);
+      }
+
+      #status-message.error {
+        display: block;
+        background: #450a0a;
+        color: var(--red);
+      }
+
+      .api-key-field {
+        position: relative;
+      }
+
+      .api-key-field .toggle-visibility {
+        position: absolute;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        padding: 4px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>
+      <img src="../icons/icon-48.png" alt="" />
+      Tab Whisperer Settings
+    </h1>
+    <p class="subtitle">
+      Configure your AI assistant and voice server connection.
+    </p>
+
+    <!-- LLM Settings -->
+    <div class="section">
+      <h2>AI Provider</h2>
+
+      <div class="field">
+        <label>Provider</label>
+        <select id="provider">
+          <option value="openai">OpenAI</option>
+          <option value="ollama">Ollama (Local)</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>API Key <span class="hint">(required for OpenAI)</span></label>
+        <div class="api-key-field">
+          <input type="password" id="apiKey" placeholder="sk-..." />
+          <button class="toggle-visibility" id="toggle-key" type="button">
+            show
+          </button>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label>Model</label>
+          <input type="text" id="model" placeholder="gpt-5-nano" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label>Temperature</label>
+          <input
+            type="number"
+            id="temperature"
+            min="0"
+            max="2"
+            step="0.1"
+            placeholder="1"
+          />
+        </div>
+        <div class="field">
+          <label>Max Tokens</label>
+          <input
+            type="number"
+            id="maxTokens"
+            min="256"
+            max="16384"
+            step="256"
+            placeholder="10000"
+          />
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Base URL <span class="hint">(advanced)</span></label>
+        <input
+          type="text"
+          id="baseUrl"
+          placeholder="https://api.openai.com/v1"
+        />
+      </div>
+    </div>
+
+    <!-- Voice Server Settings -->
+    <div class="section">
+      <h2>Voice Server</h2>
+
+      <div class="row">
+        <div class="field">
+          <label>Server URL</label>
+          <input
+            type="text"
+            id="voiceServerUrl"
+            placeholder="ws://localhost:8765"
+          />
+        </div>
+        <div class="field">
+          <label>Wake Word</label>
+          <input type="text" id="wakeWord" placeholder="hey tab" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="btn-row">
+      <button id="btn-save">Save Settings</button>
+      <button id="btn-reset" class="secondary">Reset to Defaults</button>
+    </div>
+
+    <div id="status-message"></div>
+
+    <script src="options.js"></script>
+  </body>
+</html>
