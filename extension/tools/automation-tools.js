@@ -9,6 +9,45 @@
 var AutomationTools = (function () {
   "use strict";
 
+  const BLOCKED_SITE_ERROR = "This site is blocked by your privacy settings.";
+
+  async function getBlockedPatterns() {
+    if (typeof UrlPolicy === "undefined" || !UrlPolicy.getBlockedPatterns) {
+      return [];
+    }
+    try {
+      return await UrlPolicy.getBlockedPatterns();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  async function ensureTabAllowed(tabId, blockedPatterns) {
+    try {
+      const tab = await browser.tabs.get(tabId);
+      if (
+        tab &&
+        tab.url &&
+        typeof UrlPolicy !== "undefined" &&
+        UrlPolicy.isBlockedUrl &&
+        UrlPolicy.isBlockedUrl(tab.url, blockedPatterns)
+      ) {
+        return {
+          error: BLOCKED_SITE_ERROR,
+          blocked: true,
+          tabId,
+          url: tab.url,
+        };
+      }
+
+      return { tab };
+    } catch (err) {
+      return {
+        error: `Tab ${tabId} no longer exists: ${err.message}`,
+      };
+    }
+  }
+
   // ─── inspect_page ──────────────────────────────────────────
   //
   // Inject a content script that extracts interactive elements
@@ -19,6 +58,10 @@ var AutomationTools = (function () {
     if (!tabId) {
       return { error: "tabId is required" };
     }
+
+    const blockedPatterns = await getBlockedPatterns();
+    const tabCheck = await ensureTabAllowed(tabId, blockedPatterns);
+    if (tabCheck.error) return tabCheck;
 
     try {
       const results = await browser.tabs.executeScript(tabId, {
@@ -173,6 +216,10 @@ var AutomationTools = (function () {
       return { error: "actions array is required and must not be empty" };
     }
 
+    const blockedPatterns = await getBlockedPatterns();
+    const tabCheck = await ensureTabAllowed(tabId, blockedPatterns);
+    if (tabCheck.error) return tabCheck;
+
     const results = [];
 
     for (let i = 0; i < actions.length; i++) {
@@ -302,6 +349,10 @@ var AutomationTools = (function () {
   async function waitForPage({ tabId, timeout }) {
     if (!tabId) return { error: "tabId is required" };
 
+    const blockedPatterns = await getBlockedPatterns();
+    const tabCheck = await ensureTabAllowed(tabId, blockedPatterns);
+    if (tabCheck.error) return tabCheck;
+
     const maxWait = Math.min(timeout || 5000, 15000); // cap at 15s
     const start = Date.now();
     const pollInterval = 250;
@@ -309,6 +360,20 @@ var AutomationTools = (function () {
     while (Date.now() - start < maxWait) {
       try {
         const tab = await browser.tabs.get(tabId);
+        if (
+          tab &&
+          tab.url &&
+          typeof UrlPolicy !== "undefined" &&
+          UrlPolicy.isBlockedUrl &&
+          UrlPolicy.isBlockedUrl(tab.url, blockedPatterns)
+        ) {
+          return {
+            error: BLOCKED_SITE_ERROR,
+            blocked: true,
+            tabId,
+            url: tab.url,
+          };
+        }
         if (tab.status === "complete") {
           return {
             ok: true,
@@ -326,6 +391,21 @@ var AutomationTools = (function () {
     // Timeout — return current state anyway
     try {
       const tab = await browser.tabs.get(tabId);
+      if (
+        tab &&
+        tab.url &&
+        typeof UrlPolicy !== "undefined" &&
+        UrlPolicy.isBlockedUrl &&
+        UrlPolicy.isBlockedUrl(tab.url, blockedPatterns)
+      ) {
+        return {
+          error: BLOCKED_SITE_ERROR,
+          blocked: true,
+          tabId,
+          url: tab.url,
+        };
+      }
+
       return {
         ok: false,
         timeout: true,

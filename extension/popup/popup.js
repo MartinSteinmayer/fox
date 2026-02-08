@@ -20,6 +20,14 @@
   const btnClearHistory = document.getElementById("btn-clear-history");
   const textInput = document.getElementById("text-input");
   const btnSend = document.getElementById("btn-send");
+  const DEFAULT_INPUT_PLACEHOLDER = textInput.placeholder || "Type a command...";
+  const SEND_ICON_SVG = btnSend.innerHTML;
+  const CANCEL_ICON_SVG = `
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <line x1="18" y1="6" x2="6" y2="18"/>
+      <line x1="6" y1="6" x2="18" y2="18"/>
+    </svg>
+  `;
 
   // ─── Tool Labels & Summaries ───────────────────────────
 
@@ -49,6 +57,15 @@
     inspect_page: "Inspecting page",
     interact_with_page: "Interacting with page",
     wait_for_page: "Waiting for page load",
+  };
+
+  const PERMISSION_TIER_LABELS = {
+    read: "Reading",
+    organize: "Organizing",
+    navigate: "Navigating",
+    close: "Closing tabs",
+    interact: "Page interaction",
+    report: "Reporting",
   };
 
   function toolLabel(name) {
@@ -318,6 +335,9 @@
           micIcon.className = "mic-icon";
           setQuickStartVisible(false);
           toolArea.classList.add("active");
+          setSendButtonMode("cancel");
+          textInput.disabled = true;
+          textInput.placeholder = "Processing command...";
           currentState = "processing";
         } else {
           // Idle or listening — fresh mic state, no stale tools
@@ -345,6 +365,7 @@
         // New command starting — show command text, clear old tools, enter processing
         currentCommandId = msg.commandId;
         clearToolArea();
+        removeConfirmationCards();
         showCommand(msg.command);
         setState("processing");
         break;
@@ -359,7 +380,14 @@
         // Only process completion for the current command
         if (msg.commandId && msg.commandId !== currentCommandId) break;
         removeThinkingIndicator();
-        addCompletionCard(msg.summary, msg.response, msg.toolCalls || [], msg.error);
+        removeConfirmationCards();
+        addCompletionCard(
+          msg.summary,
+          msg.response,
+          msg.toolCalls || [],
+          msg.error,
+          !!msg.cancelled,
+        );
         // Transition to idle but KEEP tool area visible until next command
         setState("idle");
 
@@ -367,6 +395,11 @@
         if (port) {
           port.postMessage({ type: "get_history" });
         }
+        break;
+
+      case "confirm_needed":
+        if (msg.commandId && msg.commandId !== currentCommandId) break;
+        addConfirmationCard(msg.confirmId, msg.toolName, msg.args || {});
         break;
 
       case "command_queued":
@@ -409,6 +442,10 @@
         addReasoningStep(msg.message, currentIteration);
         break;
 
+      case "permissions":
+        addPermissionBadges(msg.tiers || [], currentIteration);
+        break;
+
       case "thinking":
         // Reserved for low-level executor state updates.
         // We show explicit "reasoning" updates as pass headers instead.
@@ -439,6 +476,18 @@
 
   // ─── State Management ──────────────────────────────────
 
+  function setSendButtonMode(mode) {
+    const cancelMode = mode === "cancel";
+    btnSend.classList.toggle("cancel", cancelMode);
+    btnSend.title = cancelMode ? "Cancel" : "Send";
+    btnSend.innerHTML = cancelMode ? CANCEL_ICON_SVG : SEND_ICON_SVG;
+  }
+
+  function sendCancelRequest() {
+    if (!port) return;
+    port.postMessage({ type: "cancel" });
+  }
+
   function setQuickStartVisible(visible) {
     if (!quickStart) return;
     const shouldShow = !!visible && !(historyPanel && historyPanel.open);
@@ -450,6 +499,10 @@
     currentState = newState;
 
     if (newState === "processing") {
+      setSendButtonMode("cancel");
+      textInput.disabled = true;
+      textInput.placeholder = "Processing command...";
+
       // Hide mic immediately, show tool area after brief delay
       micIcon.style.display = "none";
       micIcon.className = "mic-icon";
@@ -458,6 +511,10 @@
         toolArea.classList.add("active");
       }, 100);
     } else if (newState === "idle") {
+      setSendButtonMode("send");
+      textInput.disabled = false;
+      textInput.placeholder = DEFAULT_INPUT_PLACEHOLDER;
+
       if (toolArea.children.length > 0) {
         // Tool results visible — keep them + command text, mic stays hidden
         micIcon.style.display = "none";
@@ -473,6 +530,10 @@
         setQuickStartVisible(true);
       }
     } else if (newState === "wake" || newState === "listening") {
+      setSendButtonMode("send");
+      textInput.disabled = false;
+      textInput.placeholder = DEFAULT_INPUT_PLACEHOLDER;
+
       // Voice session — show mic animation, hide tool area + command text
       toolArea.classList.remove("active");
       commandText.classList.remove("active");
@@ -480,6 +541,10 @@
       micIcon.className = `mic-icon ${newState}`;
       setQuickStartVisible(false);
     } else if (newState === "error") {
+      setSendButtonMode("send");
+      textInput.disabled = false;
+      textInput.placeholder = DEFAULT_INPUT_PLACEHOLDER;
+
       micIcon.style.display = "";
       micIcon.className = "mic-icon error";
       setQuickStartVisible(false);
@@ -574,6 +639,124 @@
     scrollTimelineToBottom();
   }
 
+  function addPermissionBadges(tiers, iteration) {
+    if (!Array.isArray(tiers) || tiers.length === 0) return;
+
+    const targetIteration = typeof iteration === "number" ? iteration : currentIteration;
+    const body = getIterationBody(targetIteration);
+
+    const existing = body.querySelector(".permission-row");
+    if (existing) existing.remove();
+
+    const row = document.createElement("div");
+    row.className = "permission-row";
+
+    const seen = new Set();
+    for (const tier of tiers) {
+      if (!tier || seen.has(tier)) continue;
+      seen.add(tier);
+
+      const badge = document.createElement("span");
+      badge.className = "permission-badge";
+      badge.dataset.tier = tier;
+      badge.textContent = PERMISSION_TIER_LABELS[tier] || tier;
+      row.appendChild(badge);
+    }
+
+    if (!row.children.length) return;
+
+    body.insertBefore(row, body.firstChild);
+    scrollTimelineToBottom();
+  }
+
+  function removeConfirmationCards() {
+    const cards = toolArea.querySelectorAll(".confirm-card");
+    cards.forEach((card) => card.remove());
+    refreshAllIterationStatus();
+  }
+
+  function buildConfirmationMessage(toolName, args) {
+    if (toolName === "close_tabs") {
+      const count = Array.isArray(args && args.tabIds) ? args.tabIds.length : null;
+      if (count != null) {
+        return `Close ${count} tab${count === 1 ? "" : "s"}?`;
+      }
+      return "Close the selected tabs?";
+    }
+
+    if (toolName === "close_duplicate_tabs") {
+      return "Remove duplicate tabs in this window?";
+    }
+
+    return "Approve this action?";
+  }
+
+  function addConfirmationCard(confirmId, toolName, args) {
+    if (!confirmId) return;
+
+    const existing = toolArea.querySelector(`.confirm-card[data-confirm-id="${confirmId}"]`);
+    if (existing) return;
+
+    const targetIteration = currentIteration >= 0 ? currentIteration : -1;
+    const body = getIterationBody(targetIteration);
+
+    const card = document.createElement("div");
+    card.className = "confirm-card";
+    card.dataset.confirmId = confirmId;
+
+    const title = document.createElement("div");
+    title.className = "confirm-title";
+    title.textContent = "Confirmation required";
+    card.appendChild(title);
+
+    const message = document.createElement("div");
+    message.className = "confirm-message";
+    message.textContent = buildConfirmationMessage(toolName, args || {});
+    card.appendChild(message);
+
+    const actions = document.createElement("div");
+    actions.className = "confirm-actions";
+
+    const btnAllow = document.createElement("button");
+    btnAllow.type = "button";
+    btnAllow.className = "confirm-btn allow";
+    btnAllow.textContent = "Allow";
+
+    const btnDeny = document.createElement("button");
+    btnDeny.type = "button";
+    btnDeny.className = "confirm-btn deny";
+    btnDeny.textContent = "Deny";
+
+    let answered = false;
+    function reply(approved) {
+      if (answered) return;
+      answered = true;
+
+      if (port) {
+        port.postMessage({
+          type: "confirm_response",
+          confirmId,
+          approved: !!approved,
+        });
+      }
+
+      card.remove();
+      refreshIterationStatus(body.closest(".timeline-iteration"));
+      scrollTimelineToBottom();
+    }
+
+    btnAllow.addEventListener("click", () => reply(true));
+    btnDeny.addEventListener("click", () => reply(false));
+
+    actions.appendChild(btnAllow);
+    actions.appendChild(btnDeny);
+    card.appendChild(actions);
+
+    body.appendChild(card);
+    refreshIterationStatus(body.closest(".timeline-iteration"));
+    scrollTimelineToBottom();
+  }
+
   function addThinkingIndicator(message, iteration) {
     removeThinkingIndicator();
 
@@ -634,17 +817,17 @@
     scrollTimelineToBottom();
   }
 
-  function addCompletionCard(summary, response, toolCalls, error) {
+  function addCompletionCard(summary, response, toolCalls, error, cancelled) {
     const existing = toolArea.querySelector(".completion-card");
     if (existing) existing.remove();
 
     const card = document.createElement("div");
     card.className = "completion-card";
-    card.dataset.status = error ? "error" : "done";
+    card.dataset.status = cancelled ? "cancelled" : error ? "error" : "done";
 
     const title = document.createElement("div");
     title.className = "completion-title";
-    title.textContent = error ? "Needs attention" : "Done";
+    title.textContent = cancelled ? "Cancelled" : error ? "Needs attention" : "Done";
     card.appendChild(title);
 
     const summaryLine = document.createElement("div");
@@ -658,7 +841,9 @@
       const meta = document.createElement("div");
       meta.className = "completion-meta";
 
-      if (failed > 0) {
+      if (cancelled) {
+        meta.textContent = `${completed} completed before cancel`;
+      } else if (failed > 0) {
         meta.textContent = `${completed} done, ${failed} failed`;
       } else {
         meta.textContent = `${toolCalls.length} step${toolCalls.length === 1 ? "" : "s"} completed`;
@@ -892,6 +1077,11 @@
   // ─── Text Input ────────────────────────────────────────
 
   function sendTextCommand() {
+    if (currentState === "processing") {
+      sendCancelRequest();
+      return;
+    }
+
     const text = textInput.value.trim();
     if (!text || !port) return;
     textInput.value = "";
@@ -915,6 +1105,10 @@
   textInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
+      if (currentState === "processing") {
+        sendCancelRequest();
+        return;
+      }
       sendTextCommand();
     }
   });
@@ -937,5 +1131,8 @@
   // The actual state will be set by the 'init' message from background
   micIcon.style.display = "";
   micIcon.className = "mic-icon idle";
+  setSendButtonMode("send");
+  textInput.disabled = false;
+  textInput.placeholder = DEFAULT_INPUT_PLACEHOLDER;
 
 })();

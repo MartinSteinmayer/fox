@@ -115,6 +115,7 @@
       input[type="text"],
       input[type="password"],
       input[type="number"],
+      textarea,
       select {
         width: 100%;
         background: rgba(9, 16, 30, 0.9);
@@ -128,9 +129,22 @@
       }
 
       input:focus,
+      textarea:focus,
       select:focus {
         border-color: var(--accent);
         box-shadow: 0 0 0 2px rgba(239, 150, 84, 0.22);
+      }
+
+      textarea {
+        resize: vertical;
+        min-height: 120px;
+        line-height: 1.45;
+      }
+
+      .field-note {
+        margin-top: 6px;
+        color: var(--text-muted);
+        font-size: 12px;
       }
 
       select {
@@ -321,6 +335,26 @@
         <div class="field">
           <label>Wake Word</label>
           <input type="text" id="wakeWord" placeholder="hey tab" />
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Privacy</h2>
+
+      <div class="field">
+        <label>
+          Blocked Sites
+          <span class="hint">(one pattern per line)</span>
+        </label>
+        <textarea
+          id="blockedSites"
+          placeholder="*.bank.com
+private.example.com
+https://sensitive.site/*"
+        ></textarea>
+        <div class="field-note">
+          fox will not inspect, interact with, or auto-extract content from matching sites.
         </div>
       </div>
     </div>

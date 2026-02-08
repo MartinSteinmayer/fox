@@ -14,6 +14,7 @@
   // ─── State ─────────────────────────────────────────────────
 
   const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+  const CONFIRM_TIMEOUT_MS = 30_000;
 
   const state = {
     wsConnected: false,
@@ -24,11 +25,19 @@
     actionLog: [], // History of actions for display (persisted)
     currentCommand: null, // In-progress command: { commandId, command, toolCalls[], startedAt }
     commandQueue: [], // FIFO queue for commands arriving while processing
+    currentAbortController: null,
   };
 
   let commandIdCounter = 0;
+  let confirmIdCounter = 0;
+  const pendingConfirmations = new Map();
+
   function generateCommandId() {
     return `cmd_${Date.now()}_${commandIdCounter++}`;
+  }
+
+  function generateConfirmId() {
+    return `confirm_${Date.now()}_${confirmIdCounter++}`;
   }
 
   // ─── Persistent Action Log ──────────────────────────────
@@ -60,6 +69,7 @@
     ollamaBaseUrl: "http://localhost:11434/v1",
     voiceServerUrl: "ws://localhost:8765",
     wakeWord: "hey fox",
+    blockedSites: "",
   };
 
   // ─── Badge & Status ──────────────────────────────────────
@@ -150,7 +160,11 @@
     }
   }
 
-  function buildCompletionSummary(response, error, toolCalls) {
+  function buildCompletionSummary(response, error, toolCalls, cancelled = false) {
+    if (cancelled) {
+      return "Command cancelled.";
+    }
+
     if (error) {
       return truncateText(String(error).replace(/^Error:\s*/i, ""), 180);
     }
@@ -194,6 +208,57 @@
     }
   }
 
+  function resolvePendingConfirmation(confirmId, approved) {
+    const pending = pendingConfirmations.get(confirmId);
+    if (!pending) return false;
+
+    clearTimeout(pending.timeoutId);
+    pendingConfirmations.delete(confirmId);
+    pending.resolve(!!approved);
+    return true;
+  }
+
+  function resolveConfirmationsForCommand(commandId, approved) {
+    if (!commandId) return;
+
+    for (const [confirmId, pending] of pendingConfirmations.entries()) {
+      if (pending.commandId !== commandId) continue;
+      clearTimeout(pending.timeoutId);
+      pendingConfirmations.delete(confirmId);
+      pending.resolve(!!approved);
+    }
+  }
+
+  async function requestToolConfirmation(commandId, toolName, args, source = "popup") {
+    if (!state.popupPort) {
+      // Voice commands may run without the popup open; keep them hands-free.
+      return source === "voice";
+    }
+
+    const confirmId = generateConfirmId();
+
+    return new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        pendingConfirmations.delete(confirmId);
+        resolve(false);
+      }, CONFIRM_TIMEOUT_MS);
+
+      pendingConfirmations.set(confirmId, {
+        commandId,
+        resolve,
+        timeoutId,
+      });
+
+      sendToPopup({
+        type: "confirm_needed",
+        commandId,
+        confirmId,
+        toolName,
+        args: args || {},
+      });
+    });
+  }
+
   // Handle long-lived connections from popup
   browser.runtime.onConnect.addListener((port) => {
     if (port.name === "popup") {
@@ -215,6 +280,13 @@
 
       port.onDisconnect.addListener(() => {
         state.popupPort = null;
+
+        // If confirmation UI disappears, deny pending confirmations.
+        for (const [confirmId, pending] of pendingConfirmations.entries()) {
+          clearTimeout(pending.timeoutId);
+          pendingConfirmations.delete(confirmId);
+          pending.resolve(false);
+        }
       });
 
       port.onMessage.addListener(handlePopupMessage);
@@ -251,7 +323,17 @@
         await handleCommand(message.text, "popup");
         break;
       case "cancel":
-        // TODO: implement cancellation
+        if (state.currentAbortController) {
+          state.currentAbortController.abort();
+        }
+        if (state.currentCommand && state.currentCommand.commandId) {
+          resolveConfirmationsForCommand(state.currentCommand.commandId, false);
+        }
+        break;
+      case "confirm_response":
+        if (message.confirmId) {
+          resolvePendingConfirmation(message.confirmId, !!message.approved);
+        }
         break;
       case "reconnect_ws":
         connectWebSocket();
@@ -300,6 +382,9 @@
     state.processing = true;
     updateStatus("processing");
 
+    const abortController = new AbortController();
+    state.currentAbortController = abortController;
+
     // Signal voice server that we're busy
     sendToVoiceServer({ type: "busy", commandId });
 
@@ -317,32 +402,41 @@
     const recentHistory = state.actionLog.slice(-5);
 
     try {
-      const result = await ToolExecutor.execute(text, (type, data) => {
-        // Forward progress updates to popup with commandId
-        sendToPopup({ type: "progress", commandId, progressType: type, ...data });
+      const result = await ToolExecutor.execute(
+        text,
+        (type, data) => {
+          // Forward progress updates to popup with commandId
+          sendToPopup({ type: "progress", commandId, progressType: type, ...data });
 
-        // Track tool calls in currentCommand (with timestamps)
-        if (type === "tool_call") {
-          state.currentCommand.toolCalls.push({
-            callId: data.callId,
-            name: data.name,
-            args: data.args,
-            result: null, // filled in on tool_result
-            timestamp: Date.now(),
-          });
-        }
+          // Track tool calls in currentCommand (with timestamps)
+          if (type === "tool_call") {
+            state.currentCommand.toolCalls.push({
+              callId: data.callId,
+              name: data.name,
+              args: data.args,
+              result: null, // filled in on tool_result
+              timestamp: Date.now(),
+            });
+          }
 
-        // Attach result by callId (exact match, no scanning)
-        if (type === "tool_result") {
-          const pending = state.currentCommand.toolCalls;
-          for (let i = pending.length - 1; i >= 0; i--) {
-            if (pending[i].callId === data.callId) {
-              pending[i].result = data.result;
-              break;
+          // Attach result by callId (exact match, no scanning)
+          if (type === "tool_result") {
+            const pending = state.currentCommand.toolCalls;
+            for (let i = pending.length - 1; i >= 0; i--) {
+              if (pending[i].callId === data.callId) {
+                pending[i].result = data.result;
+                break;
+              }
             }
           }
-        }
-      }, recentHistory);
+        },
+        recentHistory,
+        {
+          signal: abortController.signal,
+          confirm: (toolName, args) =>
+            requestToolConfirmation(commandId, toolName, args, source),
+        },
+      );
 
       // Build final log entry from currentCommand + result
       const logEntry = {
@@ -352,12 +446,14 @@
         toolCalls: state.currentCommand.toolCalls,
         response: result.response,
         error: result.error || null,
+        cancelled: !!result.cancelled,
       };
 
       const completionSummary = buildCompletionSummary(
         result.response,
         result.error,
         state.currentCommand.toolCalls,
+        !!result.cancelled,
       );
 
       sendToPopup({
@@ -367,13 +463,18 @@
         toolCalls: state.currentCommand.toolCalls,
         error: result.error,
         summary: completionSummary,
+        cancelled: !!result.cancelled,
       });
 
       // Show notification if popup is closed
       if (!state.popupPort) {
         browser.notifications.create({
           type: "basic",
-          title: result.error ? "fox: issue" : "fox: done",
+          title: result.cancelled
+            ? "fox: cancelled"
+            : result.error
+              ? "fox: issue"
+              : "fox: done",
           message: completionSummary,
           iconUrl: browser.runtime.getURL("icons/logo_wihtout_background.png"),
         });
@@ -424,6 +525,8 @@
 
       return { error: errorMsg };
     } finally {
+      resolveConfirmationsForCommand(commandId, false);
+      state.currentAbortController = null;
       state.processing = false;
       state.currentCommand = null;
 

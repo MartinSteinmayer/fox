@@ -26,6 +26,8 @@ var ToolExecutor = (function () {
 
   const GLOBAL_CONTEXT_BUDGET = 10000;  // chars total for all tabs (keeps TPM usage low)
   const MAX_CHARS_PER_TAB = 800;        // hard cap per tab
+  const CONTENT_EXTRACTION_TIMEOUT_MS = 1500;
+  const CONTEXT_BUILD_TIMEOUT_MS = 5000;
 
   // ─── Content Extraction ──────────────────────────────────
 
@@ -34,13 +36,23 @@ var ToolExecutor = (function () {
    * the structured result.  Silently returns null for tabs we
    * can't inject into (about:*, moz-extension:*, etc.).
    */
-  async function extractTabContent(tabId) {
+  async function extractTabContent(tabId, tabUrl, blockedPatterns) {
+    if (isUrlBlocked(tabUrl, blockedPatterns)) {
+      return { blocked: true };
+    }
+
     try {
-      const results = await browser.tabs.executeScript(tabId, {
+      const extractionPromise = browser.tabs.executeScript(tabId, {
         file: "/content/extract.js",
         runAt: "document_idle",
+      }).then((results) => (results && results[0] ? results[0] : null))
+        .catch(() => null);
+
+      const timeoutPromise = new Promise((resolve) => {
+        setTimeout(() => resolve(null), CONTENT_EXTRACTION_TIMEOUT_MS);
       });
-      return results && results[0] ? results[0] : null;
+
+      return await Promise.race([extractionPromise, timeoutPromise]);
     } catch (e) {
       // Privileged / restricted pages — expected
       return null;
@@ -125,6 +137,7 @@ var ToolExecutor = (function () {
   async function buildContext() {
     try {
       const tabs = await browser.tabs.query({});
+      const blockedPatterns = await getBlockedPatternsSafe();
       let groups = [];
       try {
         groups = await browser.tabGroups.query({});
@@ -140,8 +153,13 @@ var ToolExecutor = (function () {
       );
 
       // Extract content from all tabs in parallel
+      const blockedByPolicy = tabs.map((t) => isUrlBlocked(t.url, blockedPatterns));
+
       const extractions = await Promise.all(
-        tabs.map(t => extractTabContent(t.id)),
+        tabs.map((t, i) => {
+          if (blockedByPolicy[i]) return Promise.resolve({ blocked: true });
+          return extractTabContent(t.id, t.url, blockedPatterns);
+        }),
       );
 
       // Build tab summaries with enriched content
@@ -154,15 +172,20 @@ var ToolExecutor = (function () {
         if (t.groupId && t.groupId !== -1) flags.push(`group:${t.groupId}`);
         if (t.audible) flags.push("playing audio");
         if (t.discarded) flags.push("discarded");
+        if (blockedByPolicy[i]) flags.push("blocked");
         if (flags.length > 0) entry += ` (${flags.join(", ")})`;
 
         // Enriched content (budget-limited)
-        const basicLen = entry.length;
-        const contentBudget = Math.max(perTabBudget - basicLen - 10, 0);
-        const enriched = formatExtraction(extractions[i], contentBudget);
+        if (blockedByPolicy[i]) {
+          entry += "\n    content access blocked by user policy";
+        } else {
+          const basicLen = entry.length;
+          const contentBudget = Math.max(perTabBudget - basicLen - 10, 0);
+          const enriched = formatExtraction(extractions[i], contentBudget);
 
-        if (enriched) {
-          entry += `\n    ${enriched}`;
+          if (enriched) {
+            entry += `\n    ${enriched}`;
+          }
         }
 
         return entry;
@@ -214,6 +237,116 @@ ${groupSummary}`;
     interact_with_page: "interact with page elements",
     wait_for_page: "wait for page load",
   };
+
+  const TOOL_PERMISSION_TIERS = {
+    list_tabs: "read",
+    list_groups: "read",
+    list_search_engines: "read",
+    search_bookmarks: "read",
+    search_history: "read",
+
+    group_tabs: "organize",
+    ungroup_tabs: "organize",
+    move_tabs: "organize",
+    pin_tabs: "organize",
+    mute_tabs: "organize",
+    collapse_group: "organize",
+    update_group: "organize",
+    reload_tabs: "organize",
+    discard_tabs: "organize",
+    duplicate_tab: "organize",
+    switch_tab: "organize",
+
+    create_tab: "navigate",
+    web_search: "navigate",
+    create_bookmark: "navigate",
+
+    close_tabs: "close",
+    close_duplicate_tabs: "close",
+
+    inspect_page: "interact",
+    interact_with_page: "interact",
+    wait_for_page: "interact",
+
+    generate_report: "report",
+  };
+
+  const DESTRUCTIVE_TOOLS = new Set(["close_tabs", "close_duplicate_tabs"]);
+  const BLOCKED_SITE_ERROR = "Blocked by privacy settings for this site.";
+
+  function getPermissionTiers(parsedCalls) {
+    const tiers = [];
+    const seen = new Set();
+
+    for (const call of parsedCalls) {
+      const tier = TOOL_PERMISSION_TIERS[call.funcName];
+      if (!tier || seen.has(tier)) continue;
+      seen.add(tier);
+      tiers.push(tier);
+    }
+
+    return tiers;
+  }
+
+  function createAbortError() {
+    return new DOMException("Aborted", "AbortError");
+  }
+
+  function isAbortError(err) {
+    return !!(err && (err.name === "AbortError" || err.code === 20));
+  }
+
+  function throwIfAborted(signal) {
+    if (signal && signal.aborted) {
+      throw createAbortError();
+    }
+  }
+
+  async function getBlockedPatternsSafe() {
+    if (typeof UrlPolicy === "undefined" || !UrlPolicy.getBlockedPatterns) {
+      return [];
+    }
+    try {
+      return await UrlPolicy.getBlockedPatterns();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function isUrlBlocked(url, blockedPatterns) {
+    if (!url || !Array.isArray(blockedPatterns) || blockedPatterns.length === 0) {
+      return false;
+    }
+    if (typeof UrlPolicy === "undefined" || !UrlPolicy.isBlockedUrl) {
+      return false;
+    }
+    return UrlPolicy.isBlockedUrl(url, blockedPatterns);
+  }
+
+  function awaitWithSignal(promise, signal) {
+    if (!signal) return Promise.resolve(promise);
+    if (signal.aborted) return Promise.reject(createAbortError());
+
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        signal.removeEventListener("abort", onAbort);
+        reject(createAbortError());
+      };
+
+      signal.addEventListener("abort", onAbort, { once: true });
+
+      Promise.resolve(promise).then(
+        (value) => {
+          signal.removeEventListener("abort", onAbort);
+          resolve(value);
+        },
+        (err) => {
+          signal.removeEventListener("abort", onAbort);
+          reject(err);
+        },
+      );
+    });
+  }
 
   function cleanReasoningText(text) {
     if (!text || typeof text !== "string") return null;
@@ -285,7 +418,10 @@ ${groupSummary}`;
     onUpdate,
     allToolCalls,
     messages,
+    signal,
   ) {
+    throwIfAborted(signal);
+
     const createdTabs = toolResults
       .filter((t) => t.funcName === "create_tab" && !(t.result && t.result.deduped))
       .map((t) => t.result && t.result.tab && t.result.tab.id)
@@ -300,6 +436,8 @@ ${groupSummary}`;
 
     const autoRuns = await Promise.all(
       createdTabs.map(async (tabId, index) => {
+        throwIfAborted(signal);
+
         const waitArgs = { tabId, timeout: AUTO_WAIT_TIMEOUT_MS };
         const waitCallId = nextCallId();
         onUpdate("tool_call", {
@@ -314,6 +452,8 @@ ${groupSummary}`;
           name: "wait_for_page",
           result: waitResult,
         });
+
+        throwIfAborted(signal);
 
         const inspectArgs = { tabId };
         const inspectCallId = nextCallId();
@@ -428,20 +568,35 @@ ${groupSummary}`;
 
   /**
    * Execute a single command through the LLM tool-calling loop.
-   * 
+   *
    * @param {string} userText - The user's command text
    * @param {function} onUpdate - Callback for progress updates: (type, data) => void
-   *   type: "thinking" | "reasoning" | "tool_call" | "tool_result" | "response" | "error"
+   *   type: "thinking" | "reasoning" | "permissions" | "tool_call" | "tool_result" | "response" | "error"
    * @param {Array} recentHistory - Last N action log entries for conversation context
-   * @returns {Object} { response: string, toolCalls: Array, error?: string }
+   * @param {Object} options - { signal?: AbortSignal, confirm?: (name, args) => Promise<boolean> }
+   * @returns {Object} { response: string, toolCalls: Array, error?: string, cancelled?: boolean }
    */
-  async function execute(userText, onUpdate = () => {}, recentHistory = []) {
+  async function execute(userText, onUpdate = () => {}, recentHistory = [], options = {}) {
+    const signal = options && options.signal ? options.signal : null;
+    const confirmFn = options && typeof options.confirm === "function" ? options.confirm : null;
+
     const tools = ToolRegistry.getDefinitions();
-    const context = await buildContext();
     const allToolCalls = [];
     const createdTabsByUrl = new Map();
     const inFlightCreateByUrl = new Map();
     const inFlightSwitchByTab = new Map();
+    const blockedPatterns = await getBlockedPatternsSafe();
+
+    const cancelledResult = () => {
+      const message = "Command cancelled.";
+      onUpdate("error", { message });
+      return {
+        response: null,
+        toolCalls: allToolCalls,
+        error: message,
+        cancelled: true,
+      };
+    };
 
     // ─── Pre-run list_tabs instantly ────────────────────────
     // Fires UI updates immediately so it looks fast & responsive,
@@ -450,29 +605,60 @@ ${groupSummary}`;
 
     let listTabsResult;
     try {
+      throwIfAborted(signal);
       const prerunCallId = nextCallId();
       onUpdate("tool_call", { callId: prerunCallId, name: "list_tabs", args: {} });
       listTabsResult = await ToolRegistry.execute("list_tabs", {});
-      onUpdate("tool_result", { callId: prerunCallId, name: "list_tabs", result: listTabsResult });
-      allToolCalls.push({ callId: prerunCallId, name: "list_tabs", args: {}, result: listTabsResult });
+      onUpdate("tool_result", {
+        callId: prerunCallId,
+        name: "list_tabs",
+        result: listTabsResult,
+      });
+      allToolCalls.push({
+        callId: prerunCallId,
+        name: "list_tabs",
+        args: {},
+        result: listTabsResult,
+      });
     } catch (e) {
+      if (isAbortError(e) || (signal && signal.aborted)) {
+        return cancelledResult();
+      }
       console.warn("[ToolExecutor] Pre-run list_tabs failed:", e);
     }
 
+    let context = "Could not retrieve current browser state.";
+    try {
+      throwIfAborted(signal);
+
+      const contextTimeout = new Promise((resolve) => {
+        setTimeout(() => resolve("Could not retrieve current browser state."), CONTEXT_BUILD_TIMEOUT_MS);
+      });
+
+      context = await awaitWithSignal(
+        Promise.race([buildContext(), contextTimeout]),
+        signal,
+      );
+
+      throwIfAborted(signal);
+    } catch (e) {
+      if (isAbortError(e) || (signal && signal.aborted)) {
+        return cancelledResult();
+      }
+      console.warn("[ToolExecutor] Context build failed:", e);
+      context = "Could not retrieve current browser state.";
+    }
+
     // Build initial messages
-    const messages = [
-      { role: "system", content: LLMClient.SYSTEM_PROMPT },
-    ];
+    const messages = [{ role: "system", content: LLMClient.SYSTEM_PROMPT }];
 
     // ─── Inject recent conversation history ──────────────────
     // Last 5 action log entries give the LLM context for follow-up
     // commands like "do that again", "close those tabs", etc.
     if (recentHistory && recentHistory.length > 0) {
       for (const entry of recentHistory) {
-        // User's command
         messages.push({ role: "user", content: `User command: ${entry.command}` });
 
-        // Reconstruct tool calls + results
         if (entry.toolCalls && entry.toolCalls.length > 0) {
           const toolCalls = entry.toolCalls.map((tc, i) => ({
             id: `hist_${entry.id}_${i}`,
@@ -491,7 +677,6 @@ ${groupSummary}`;
 
           for (let i = 0; i < entry.toolCalls.length; i++) {
             const tc = entry.toolCalls[i];
-            // Truncate large results to save tokens
             let resultStr = JSON.stringify(tc.result || {});
             if (resultStr.length > 500) {
               resultStr = resultStr.substring(0, 497) + "...";
@@ -504,29 +689,26 @@ ${groupSummary}`;
           }
         }
 
-        // Final assistant response
         if (entry.response) {
           messages.push({ role: "assistant", content: entry.response });
         }
       }
     }
 
-    // Current command with full context
-    messages.push(
-      { role: "user", content: `${context}\n\nUser command: ${userText}` },
-    );
+    messages.push({ role: "user", content: `${context}\n\nUser command: ${userText}` });
 
-    // Inject pre-run list_tabs as if the assistant already called it
     if (listTabsResult) {
       const fakeCallId = "prerun_list_tabs";
       messages.push({
         role: "assistant",
         content: null,
-        tool_calls: [{
-          id: fakeCallId,
-          type: "function",
-          function: { name: "list_tabs", arguments: "{}" },
-        }],
+        tool_calls: [
+          {
+            id: fakeCallId,
+            type: "function",
+            function: { name: "list_tabs", arguments: "{}" },
+          },
+        ],
       });
       messages.push({
         role: "tool",
@@ -536,22 +718,23 @@ ${groupSummary}`;
     }
 
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-      let assistantMessage;
+      throwIfAborted(signal);
 
+      let assistantMessage;
       try {
-        assistantMessage = await LLMClient.chatCompletion(messages, tools);
+        assistantMessage = await LLMClient.chatCompletion(messages, tools, signal);
       } catch (err) {
+        if (isAbortError(err) || (signal && signal.aborted)) {
+          return cancelledResult();
+        }
         const errorMsg = `LLM error: ${err.message}`;
         onUpdate("error", { message: errorMsg });
         return { response: null, toolCalls: allToolCalls, error: errorMsg };
       }
 
-      // Add assistant message to conversation
       messages.push(assistantMessage);
 
-      // Check if LLM wants to call tools
       if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
-        // Parse all tool calls first (without executing yet)
         const parsed = assistantMessage.tool_calls.map((toolCall) => {
           let funcArgs;
           try {
@@ -563,171 +746,240 @@ ${groupSummary}`;
           return { toolCall, funcName: toolCall.function.name, funcArgs, callId };
         });
 
-        // Add a concise "what I'm about to do" line for this pass
         const reasoning = buildPassReasoning(parsed, assistantMessage.content);
         if (reasoning) {
           onUpdate("reasoning", { message: reasoning });
         }
 
-        // Fire all tool_call UI updates immediately so the popup shows them all at once
+        const permissionTiers = getPermissionTiers(parsed);
+        if (permissionTiers.length > 0) {
+          onUpdate("permissions", { tiers: permissionTiers });
+        }
+
         for (const { funcName, funcArgs, callId } of parsed) {
           onUpdate("tool_call", { callId, name: funcName, args: funcArgs });
           console.log(`[ToolExecutor] Calling ${funcName}(${JSON.stringify(funcArgs)})`);
         }
 
-        // Execute all tools in parallel
-        const toolResults = await Promise.all(
-          parsed.map(async ({ toolCall, funcName, funcArgs, callId }) => {
-            // Guardrail: suppress redundant switch_tab calls when the tab
-            // is already active/focused or an identical switch is in-flight.
-            if (funcName === "switch_tab") {
-              const tabId = funcArgs && funcArgs.tabId;
-              if (typeof tabId === "number") {
-                const alreadyFocused = await isTabAlreadyFocused(tabId);
-                if (alreadyFocused) {
-                  const noopResult = {
-                    success: true,
-                    skipped: true,
-                    alreadyFocused: true,
-                    tabId,
-                    message: "switch_tab skipped: tab already active and focused.",
-                  };
-                  onUpdate("tool_result", { callId, name: funcName, result: noopResult });
-                  console.log(`[ToolExecutor] ${funcName} noop (already focused):`, noopResult);
-                  return { toolCall, funcName, funcArgs, callId, result: noopResult };
-                }
+        const approvalsByCallId = new Map();
+        for (const { funcName, funcArgs, callId } of parsed) {
+          if (!DESTRUCTIVE_TOOLS.has(funcName)) continue;
 
-                const inFlightSwitch = inFlightSwitchByTab.get(tabId);
-                if (inFlightSwitch) {
-                  const firstSwitchResult = await inFlightSwitch;
-                  const dedupedSwitch = {
-                    success: true,
-                    deduped: true,
-                    tabId,
-                    switch: firstSwitchResult,
-                    message: "Duplicate switch_tab suppressed; reused in-flight switch.",
-                  };
-                  onUpdate("tool_result", { callId, name: funcName, result: dedupedSwitch });
-                  console.log(`[ToolExecutor] ${funcName} deduped (in-flight):`, dedupedSwitch);
-                  return { toolCall, funcName, funcArgs, callId, result: dedupedSwitch };
-                }
-
-                const switchPromise = ToolRegistry.execute(funcName, funcArgs);
-                inFlightSwitchByTab.set(tabId, switchPromise);
-
-                let switchResult;
-                try {
-                  switchResult = await switchPromise;
-                } finally {
-                  inFlightSwitchByTab.delete(tabId);
-                }
-
-                onUpdate("tool_result", { callId, name: funcName, result: switchResult });
-                console.log(`[ToolExecutor] ${funcName} result:`, switchResult);
-                return { toolCall, funcName, funcArgs, callId, result: switchResult };
-              }
+          try {
+            throwIfAborted(signal);
+            const approved = confirmFn
+              ? await awaitWithSignal(confirmFn(funcName, funcArgs), signal)
+              : true;
+            approvalsByCallId.set(callId, !!approved);
+          } catch (err) {
+            if (isAbortError(err) || (signal && signal.aborted)) {
+              return cancelledResult();
             }
+            const errorMsg = `Confirmation error: ${err.message}`;
+            onUpdate("error", { message: errorMsg });
+            return { response: null, toolCalls: allToolCalls, error: errorMsg };
+          }
+        }
 
-            // Guardrail: suppress duplicate create_tab calls for the same URL
-            // within a single command run. Re-focus existing tab instead.
-            if (funcName === "create_tab") {
-              const dedupKey = normalizeUrlForDedup(funcArgs && funcArgs.url);
-              if (dedupKey) {
-                const existingTab = createdTabsByUrl.get(dedupKey);
-                if (existingTab && typeof existingTab.id === "number") {
-                  const switchResult = await isTabAlreadyFocused(existingTab.id)
-                    ? {
-                        success: true,
-                        skipped: true,
-                        alreadyFocused: true,
-                        tabId: existingTab.id,
-                        message: "switch_tab skipped: tab already active and focused.",
-                      }
-                    : await ToolRegistry.execute("switch_tab", {
-                        tabId: existingTab.id,
-                      });
-                  const dedupedResult = {
-                    success: true,
-                    deduped: true,
-                    tab: existingTab,
-                    switch: switchResult,
-                    message: "Duplicate create_tab suppressed; switched to existing tab.",
-                  };
-                  onUpdate("tool_result", { callId, name: funcName, result: dedupedResult });
-                  console.log(`[ToolExecutor] ${funcName} deduped (existing):`, dedupedResult);
-                  return { toolCall, funcName, funcArgs, callId, result: dedupedResult };
+        let toolResults;
+        try {
+          toolResults = await Promise.all(
+            parsed.map(async ({ toolCall, funcName, funcArgs, callId }) => {
+              throwIfAborted(signal);
+
+              if (DESTRUCTIVE_TOOLS.has(funcName) && approvalsByCallId.get(callId) === false) {
+                const deniedResult = {
+                  error: "User denied this action.",
+                  denied: true,
+                };
+                onUpdate("tool_result", { callId, name: funcName, result: deniedResult });
+                return { toolCall, funcName, funcArgs, callId, result: deniedResult };
+              }
+
+              if (
+                funcName === "create_tab" &&
+                funcArgs &&
+                funcArgs.url &&
+                isUrlBlocked(funcArgs.url, blockedPatterns)
+              ) {
+                const blockedResult = {
+                  error: BLOCKED_SITE_ERROR,
+                  blocked: true,
+                  url: funcArgs.url,
+                };
+                onUpdate("tool_result", { callId, name: funcName, result: blockedResult });
+                return { toolCall, funcName, funcArgs, callId, result: blockedResult };
+              }
+
+              // Guardrail: suppress redundant switch_tab calls when the tab
+              // is already active/focused or an identical switch is in-flight.
+              if (funcName === "switch_tab") {
+                const tabId = funcArgs && funcArgs.tabId;
+                if (typeof tabId === "number") {
+                  const alreadyFocused = await isTabAlreadyFocused(tabId);
+                  if (alreadyFocused) {
+                    const noopResult = {
+                      success: true,
+                      skipped: true,
+                      alreadyFocused: true,
+                      tabId,
+                      message: "switch_tab skipped: tab already active and focused.",
+                    };
+                    onUpdate("tool_result", { callId, name: funcName, result: noopResult });
+                    console.log(`[ToolExecutor] ${funcName} noop (already focused):`, noopResult);
+                    return { toolCall, funcName, funcArgs, callId, result: noopResult };
+                  }
+
+                  const inFlightSwitch = inFlightSwitchByTab.get(tabId);
+                  if (inFlightSwitch) {
+                    const firstSwitchResult = await inFlightSwitch;
+                    throwIfAborted(signal);
+                    const dedupedSwitch = {
+                      success: true,
+                      deduped: true,
+                      tabId,
+                      switch: firstSwitchResult,
+                      message: "Duplicate switch_tab suppressed; reused in-flight switch.",
+                    };
+                    onUpdate("tool_result", { callId, name: funcName, result: dedupedSwitch });
+                    console.log(`[ToolExecutor] ${funcName} deduped (in-flight):`, dedupedSwitch);
+                    return { toolCall, funcName, funcArgs, callId, result: dedupedSwitch };
+                  }
+
+                  throwIfAborted(signal);
+                  const switchPromise = ToolRegistry.execute(funcName, funcArgs);
+                  inFlightSwitchByTab.set(tabId, switchPromise);
+
+                  let switchResult;
+                  try {
+                    switchResult = await switchPromise;
+                  } finally {
+                    inFlightSwitchByTab.delete(tabId);
+                  }
+
+                  throwIfAborted(signal);
+
+                  onUpdate("tool_result", { callId, name: funcName, result: switchResult });
+                  console.log(`[ToolExecutor] ${funcName} result:`, switchResult);
+                  return { toolCall, funcName, funcArgs, callId, result: switchResult };
                 }
+              }
 
-                const inFlight = inFlightCreateByUrl.get(dedupKey);
-                if (inFlight) {
-                  const firstCreateResult = await inFlight;
-                  const firstTab = firstCreateResult && firstCreateResult.tab;
-                  if (firstTab && typeof firstTab.id === "number") {
-                    const switchResult = await isTabAlreadyFocused(firstTab.id)
+              // Guardrail: suppress duplicate create_tab calls for the same URL
+              // within a single command run. Re-focus existing tab instead.
+              if (funcName === "create_tab") {
+                const dedupKey = normalizeUrlForDedup(funcArgs && funcArgs.url);
+                if (dedupKey) {
+                  const existingTab = createdTabsByUrl.get(dedupKey);
+                  if (existingTab && typeof existingTab.id === "number") {
+                    const switchResult = await isTabAlreadyFocused(existingTab.id)
                       ? {
                           success: true,
                           skipped: true,
                           alreadyFocused: true,
-                          tabId: firstTab.id,
+                          tabId: existingTab.id,
                           message: "switch_tab skipped: tab already active and focused.",
                         }
                       : await ToolRegistry.execute("switch_tab", {
-                          tabId: firstTab.id,
+                          tabId: existingTab.id,
                         });
+                    throwIfAborted(signal);
                     const dedupedResult = {
                       success: true,
                       deduped: true,
-                      tab: firstTab,
+                      tab: existingTab,
                       switch: switchResult,
-                      message: "Duplicate create_tab suppressed; reused in-flight tab.",
+                      message: "Duplicate create_tab suppressed; switched to existing tab.",
                     };
                     onUpdate("tool_result", { callId, name: funcName, result: dedupedResult });
-                    console.log(`[ToolExecutor] ${funcName} deduped (in-flight):`, dedupedResult);
+                    console.log(`[ToolExecutor] ${funcName} deduped (existing):`, dedupedResult);
                     return { toolCall, funcName, funcArgs, callId, result: dedupedResult };
                   }
+
+                  const inFlight = inFlightCreateByUrl.get(dedupKey);
+                  if (inFlight) {
+                    const firstCreateResult = await inFlight;
+                    throwIfAborted(signal);
+                    const firstTab = firstCreateResult && firstCreateResult.tab;
+                    if (firstTab && typeof firstTab.id === "number") {
+                      const switchResult = await isTabAlreadyFocused(firstTab.id)
+                        ? {
+                            success: true,
+                            skipped: true,
+                            alreadyFocused: true,
+                            tabId: firstTab.id,
+                            message: "switch_tab skipped: tab already active and focused.",
+                          }
+                        : await ToolRegistry.execute("switch_tab", {
+                            tabId: firstTab.id,
+                          });
+                      throwIfAborted(signal);
+                      const dedupedResult = {
+                        success: true,
+                        deduped: true,
+                        tab: firstTab,
+                        switch: switchResult,
+                        message: "Duplicate create_tab suppressed; reused in-flight tab.",
+                      };
+                      onUpdate("tool_result", { callId, name: funcName, result: dedupedResult });
+                      console.log(`[ToolExecutor] ${funcName} deduped (in-flight):`, dedupedResult);
+                      return { toolCall, funcName, funcArgs, callId, result: dedupedResult };
+                    }
+                  }
+
+                  throwIfAborted(signal);
+                  const createPromise = ToolRegistry.execute(funcName, funcArgs);
+                  inFlightCreateByUrl.set(dedupKey, createPromise);
+
+                  let result;
+                  try {
+                    result = await createPromise;
+                  } finally {
+                    inFlightCreateByUrl.delete(dedupKey);
+                  }
+
+                  throwIfAborted(signal);
+
+                  const resultKey = normalizeUrlForDedup(
+                    (result && result.tab && result.tab.url) || (funcArgs && funcArgs.url),
+                  );
+                  if (resultKey && result && !result.error && result.tab) {
+                    createdTabsByUrl.set(resultKey, result.tab);
+                  }
+
+                  onUpdate("tool_result", { callId, name: funcName, result });
+                  console.log(`[ToolExecutor] ${funcName} result:`, result);
+                  return { toolCall, funcName, funcArgs, callId, result };
                 }
+              }
 
-                const createPromise = ToolRegistry.execute(funcName, funcArgs);
-                inFlightCreateByUrl.set(dedupKey, createPromise);
+              throwIfAborted(signal);
+              const result = await ToolRegistry.execute(funcName, funcArgs);
+              throwIfAborted(signal);
 
-                let result;
-                try {
-                  result = await createPromise;
-                } finally {
-                  inFlightCreateByUrl.delete(dedupKey);
-                }
-
+              if (funcName === "create_tab") {
                 const resultKey = normalizeUrlForDedup(
                   (result && result.tab && result.tab.url) || (funcArgs && funcArgs.url),
                 );
                 if (resultKey && result && !result.error && result.tab) {
                   createdTabsByUrl.set(resultKey, result.tab);
                 }
-
-                onUpdate("tool_result", { callId, name: funcName, result });
-                console.log(`[ToolExecutor] ${funcName} result:`, result);
-                return { toolCall, funcName, funcArgs, callId, result };
               }
-            }
 
-            const result = await ToolRegistry.execute(funcName, funcArgs);
+              onUpdate("tool_result", { callId, name: funcName, result });
+              console.log(`[ToolExecutor] ${funcName} result:`, result);
+              return { toolCall, funcName, funcArgs, callId, result };
+            }),
+          );
+        } catch (err) {
+          if (isAbortError(err) || (signal && signal.aborted)) {
+            return cancelledResult();
+          }
+          const errorMsg = `Tool execution error: ${err.message}`;
+          onUpdate("error", { message: errorMsg });
+          return { response: null, toolCalls: allToolCalls, error: errorMsg };
+        }
 
-            if (funcName === "create_tab") {
-              const resultKey = normalizeUrlForDedup(
-                (result && result.tab && result.tab.url) || (funcArgs && funcArgs.url),
-              );
-              if (resultKey && result && !result.error && result.tab) {
-                createdTabsByUrl.set(resultKey, result.tab);
-              }
-            }
-
-            onUpdate("tool_result", { callId, name: funcName, result });
-            console.log(`[ToolExecutor] ${funcName} result:`, result);
-            return { toolCall, funcName, funcArgs, callId, result };
-          }),
-        );
-
-        // Record results and add tool messages to conversation
         for (const { toolCall, funcName, funcArgs, callId, result } of toolResults) {
           allToolCalls.push({
             callId,
@@ -743,30 +995,33 @@ ${groupSummary}`;
           });
         }
 
-        // Auto-follow-up for browser automation: when a tab is created,
-        // immediately wait for load + inspect page to expose clickable targets.
-        await autoInspectCreatedTabs(
-          toolResults,
-          iteration,
-          onUpdate,
-          allToolCalls,
-          messages,
-        );
-
-        // Continue loop — LLM will process tool results
+        try {
+          await autoInspectCreatedTabs(
+            toolResults,
+            iteration,
+            onUpdate,
+            allToolCalls,
+            messages,
+            signal,
+          );
+        } catch (err) {
+          if (isAbortError(err) || (signal && signal.aborted)) {
+            return cancelledResult();
+          }
+          const errorMsg = `Auto-follow-up error: ${err.message}`;
+          onUpdate("error", { message: errorMsg });
+          return { response: null, toolCalls: allToolCalls, error: errorMsg };
+        }
       } else {
-        // LLM returned a text response — we're done
         const responseText = assistantMessage.content || "(no response)";
-        
         onUpdate("response", { message: responseText });
-        return { 
-          response: responseText, 
-          toolCalls: allToolCalls 
+        return {
+          response: responseText,
+          toolCalls: allToolCalls,
         };
       }
     }
 
-    // Hit max iterations
     const msg = "Reached maximum tool call iterations. Here's what was done so far.";
     onUpdate("error", { message: msg });
     return {

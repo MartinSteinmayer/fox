@@ -30,6 +30,7 @@
     "scripts": [
       "tools/tab-tools.js",
       "tools/search-tools.js",
+      "lib/url-policy.js",
       "tools/report-tools.js",
       "tools/automation-tools.js",
       "tools/registry.js",

@@ -136,6 +136,46 @@ blue=work, green=dev, red=urgent, yellow=learning, purple=social, cyan=email, or
   // Track which token parameter works per model.
   // Models that reject max_tokens get remembered here.
   const tokenParamCache = {}; // model -> "new" | "old"
+  const REQUEST_TIMEOUT_MS = 45_000;
+
+  async function fetchWithTimeout(url, options, externalSignal) {
+    const controller = new AbortController();
+    let timedOut = false;
+
+    const onExternalAbort = () => {
+      controller.abort();
+    };
+
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        controller.abort();
+      } else {
+        externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+      }
+    }
+
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
+
+    try {
+      return await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (timedOut && err && err.name === "AbortError") {
+        throw new Error(`LLM request timed out after ${REQUEST_TIMEOUT_MS}ms`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+      if (externalSignal) {
+        externalSignal.removeEventListener("abort", onExternalAbort);
+      }
+    }
+  }
 
   /**
    * Build the request body with the appropriate token limit parameter.
@@ -169,15 +209,15 @@ blue=work, green=dev, red=urgent, yellow=learning, purple=social, cyan=email, or
    * Make a single API call for a specific model. Handles max_tokens vs
    * max_completion_tokens detection with one retry.
    */
-  async function tryModel(model, config, url, headers, messages, tools) {
+  async function tryModel(model, config, url, headers, messages, tools, signal) {
     const cached = tokenParamCache[model];
     const tryNew = cached === "new" || cached == null; // default to max_completion_tokens
 
-    let response = await fetch(url, {
+    let response = await fetchWithTimeout(url, {
       method: "POST",
       headers,
       body: JSON.stringify(buildBody(model, config, messages, tools, tryNew)),
-    });
+    }, signal);
 
     // Token param mismatch — retry with the other one (only if we haven't cached yet)
     if (!response.ok && response.status === 400 && !cached) {
@@ -187,13 +227,13 @@ blue=work, green=dev, red=urgent, yellow=learning, purple=social, cyan=email, or
         console.log(
           `[LLM] ${model}: retrying with ${retryNew ? "max_completion_tokens" : "max_tokens"}`,
         );
-        response = await fetch(url, {
+        response = await fetchWithTimeout(url, {
           method: "POST",
           headers,
           body: JSON.stringify(
             buildBody(model, config, messages, tools, retryNew),
           ),
-        });
+        }, signal);
         if (response.ok) {
           tokenParamCache[model] = retryNew ? "new" : "old";
         }
@@ -240,7 +280,7 @@ blue=work, green=dev, red=urgent, yellow=learning, purple=social, cyan=email, or
    * Retries on 429 (rate limit) errors with parsed delay.
    * For Ollama: uses the configured model directly.
    */
-  async function chatCompletion(messages, tools) {
+  async function chatCompletion(messages, tools, signal) {
     const config = await getConfig();
 
     const isOllama = config.provider === "ollama";
@@ -264,6 +304,7 @@ blue=work, green=dev, red=urgent, yellow=learning, purple=social, cyan=email, or
         headers,
         messages,
         tools,
+        signal,
       );
       if (!response.ok) {
         const errorText = await response.text();
@@ -283,6 +324,7 @@ blue=work, green=dev, red=urgent, yellow=learning, purple=social, cyan=email, or
         headers,
         messages,
         tools,
+        signal,
       );
 
       if (response.ok) {

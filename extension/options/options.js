@@ -15,6 +15,7 @@
     ollamaBaseUrl: "http://localhost:11434/v1",
     voiceServerUrl: "ws://localhost:8765",
     wakeWord: "hey fox",
+    blockedSites: "",
   };
 
   // ─── DOM Elements ──────────────────────────────────────
@@ -28,6 +29,7 @@
     baseUrl: document.getElementById("baseUrl"),
     voiceServerUrl: document.getElementById("voiceServerUrl"),
     wakeWord: document.getElementById("wakeWord"),
+    blockedSites: document.getElementById("blockedSites"),
     btnSave: document.getElementById("btn-save"),
     btnReset: document.getElementById("btn-reset"),
     toggleKey: document.getElementById("toggle-key"),
@@ -46,6 +48,7 @@
     els.maxTokens.value = settings.maxTokens;
     els.voiceServerUrl.value = settings.voiceServerUrl;
     els.wakeWord.value = settings.wakeWord;
+    els.blockedSites.value = settings.blockedSites;
 
     // Set base URL based on provider
     if (settings.provider === "ollama") {
@@ -71,6 +74,7 @@
       voiceServerUrl:
         els.voiceServerUrl.value.trim() || DEFAULTS.voiceServerUrl,
       wakeWord: els.wakeWord.value.trim() || DEFAULTS.wakeWord,
+      blockedSites: els.blockedSites.value,
     };
 
     // Save base URL to the right key

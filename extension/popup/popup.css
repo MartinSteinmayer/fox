@@ -14,6 +14,9 @@
   --warning: #f0b167;
   --outline: #4f545f;
   --paper: #f3f4f6;
+  --scrollbar-track: rgba(7, 14, 27, 0.88);
+  --scrollbar-thumb: rgba(239, 150, 84, 0.45);
+  --scrollbar-thumb-hover: rgba(244, 170, 110, 0.68);
 }
 
 * {
@@ -318,6 +321,45 @@ h1 {
   pointer-events: none;
   transition: opacity 0.6s ease;
   overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.tool-area,
+.history-list {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+.tool-area::-webkit-scrollbar,
+.history-list::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.tool-area::-webkit-scrollbar-track,
+.history-list::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+  border-radius: 999px;
+}
+
+.tool-area::-webkit-scrollbar-thumb,
+.history-list::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    180deg,
+    var(--scrollbar-thumb-hover),
+    var(--scrollbar-thumb)
+  );
+  border-radius: 999px;
+  border: 2px solid var(--scrollbar-track);
+}
+
+.tool-area::-webkit-scrollbar-thumb:hover,
+.history-list::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 198, 149, 0.95),
+    var(--scrollbar-thumb-hover)
+  );
 }
 
 .tool-area.active {
@@ -388,6 +430,56 @@ h1 {
 .iteration-body {
   display: flex;
   flex-direction: column;
+}
+
+.permission-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px 28px;
+}
+
+.permission-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(79, 84, 95, 0.65);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--paper);
+  background: rgba(13, 23, 42, 0.82);
+}
+
+.permission-badge[data-tier="read"] {
+  border-color: rgba(116, 190, 255, 0.55);
+  background: rgba(17, 48, 86, 0.72);
+}
+
+.permission-badge[data-tier="organize"] {
+  border-color: rgba(98, 196, 148, 0.55);
+  background: rgba(23, 56, 44, 0.72);
+}
+
+.permission-badge[data-tier="navigate"] {
+  border-color: rgba(244, 170, 110, 0.6);
+  background: rgba(78, 43, 20, 0.75);
+}
+
+.permission-badge[data-tier="close"] {
+  border-color: rgba(227, 112, 118, 0.65);
+  background: rgba(88, 28, 34, 0.75);
+}
+
+.permission-badge[data-tier="interact"] {
+  border-color: rgba(208, 153, 255, 0.58);
+  background: rgba(57, 34, 90, 0.74);
+}
+
+.permission-badge[data-tier="report"] {
+  border-color: rgba(130, 209, 255, 0.58);
+  background: rgba(19, 61, 80, 0.74);
 }
 
 .timeline-step,
@@ -534,6 +626,71 @@ h1 {
   line-height: 1.35;
 }
 
+.confirm-card {
+  margin: 4px 0 12px 28px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(240, 177, 103, 0.5);
+  background: linear-gradient(
+    180deg,
+    rgba(240, 177, 103, 0.16),
+    rgba(8, 16, 30, 0.9)
+  );
+  box-shadow: 0 8px 14px rgba(0, 0, 0, 0.22);
+  animation: step-slide-in 0.2s ease;
+}
+
+.confirm-title {
+  color: #ffd8b0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+.confirm-message {
+  margin-top: 5px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.confirm-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.confirm-btn {
+  border: 1px solid rgba(79, 84, 95, 0.7);
+  border-radius: 6px;
+  background: rgba(9, 16, 30, 0.9);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.18s ease;
+}
+
+.confirm-btn.allow {
+  border-color: rgba(98, 196, 148, 0.7);
+  color: #cff0de;
+}
+
+.confirm-btn.allow:hover {
+  background: rgba(98, 196, 148, 0.18);
+}
+
+.confirm-btn.deny {
+  border-color: rgba(227, 112, 118, 0.7);
+  color: #ffc3c7;
+}
+
+.confirm-btn.deny:hover {
+  background: rgba(227, 112, 118, 0.2);
+}
+
 .completion-card {
   margin: 4px 0 2px;
   padding: 10px 12px;
@@ -557,6 +714,15 @@ h1 {
   );
 }
 
+.completion-card[data-status="cancelled"] {
+  border-color: rgba(240, 177, 103, 0.44);
+  background: linear-gradient(
+    180deg,
+    rgba(240, 177, 103, 0.16),
+    rgba(8, 16, 30, 0.86)
+  );
+}
+
 .completion-title {
   color: #cff0de;
   font-size: 10px;
@@ -567,6 +733,10 @@ h1 {
 
 .completion-card[data-status="error"] .completion-title {
   color: #ffc3c7;
+}
+
+.completion-card[data-status="cancelled"] .completion-title {
+  color: #ffd8b0;
 }
 
 .completion-summary {
@@ -670,8 +840,23 @@ h1 {
   box-shadow: 0 0 0 2px rgba(239, 150, 84, 0.2);
 }
 
+.text-input:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 .send-btn {
   flex-shrink: 0;
+}
+
+.send-btn.cancel {
+  color: #ffc3c7;
+  background: rgba(227, 112, 118, 0.18);
+}
+
+.send-btn.cancel:hover {
+  background: rgba(227, 112, 118, 0.3);
+  color: #ffe5e8;
 }
 
 /* ─── History Panel ────────────────────────────────────── */
