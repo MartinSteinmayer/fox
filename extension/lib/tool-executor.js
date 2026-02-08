@@ -200,7 +200,7 @@ ${groupSummary}`;
     messages,
   ) {
     const createdTabs = toolResults
-      .filter((t) => t.funcName === "create_tab")
+      .filter((t) => t.funcName === "create_tab" && !(t.result && t.result.deduped))
       .map((t) => t.result && t.result.tab && t.result.tab.id)
       .filter((id) => typeof id === "number");
 
@@ -306,6 +306,23 @@ ${groupSummary}`;
   }
 
   /**
+   * Normalize URLs so duplicate create_tab calls can be suppressed.
+   */
+  function normalizeUrlForDedup(url) {
+    if (!url || typeof url !== "string") return null;
+    const trimmed = url.trim();
+    if (!trimmed) return null;
+
+    try {
+      const parsed = new URL(trimmed);
+      const path = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "");
+      return `${parsed.protocol}//${parsed.host}${path}${parsed.search}`;
+    } catch (e) {
+      return trimmed.toLowerCase();
+    }
+  }
+
+  /**
    * Execute a single command through the LLM tool-calling loop.
    * 
    * @param {string} userText - The user's command text
@@ -318,6 +335,8 @@ ${groupSummary}`;
     const tools = ToolRegistry.getDefinitions();
     const context = await buildContext();
     const allToolCalls = [];
+    const createdTabsByUrl = new Map();
+    const inFlightCreateByUrl = new Map();
 
     // ─── Pre-run list_tabs instantly ────────────────────────
     // Fires UI updates immediately so it looks fast & responsive,
@@ -446,7 +465,83 @@ ${groupSummary}`;
         // Execute all tools in parallel
         const toolResults = await Promise.all(
           parsed.map(async ({ toolCall, funcName, funcArgs, callId }) => {
+            // Guardrail: suppress duplicate create_tab calls for the same URL
+            // within a single command run. Re-focus existing tab instead.
+            if (funcName === "create_tab") {
+              const dedupKey = normalizeUrlForDedup(funcArgs && funcArgs.url);
+              if (dedupKey) {
+                const existingTab = createdTabsByUrl.get(dedupKey);
+                if (existingTab && typeof existingTab.id === "number") {
+                  const switchResult = await ToolRegistry.execute("switch_tab", {
+                    tabId: existingTab.id,
+                  });
+                  const dedupedResult = {
+                    success: true,
+                    deduped: true,
+                    tab: existingTab,
+                    switch: switchResult,
+                    message: "Duplicate create_tab suppressed; switched to existing tab.",
+                  };
+                  onUpdate("tool_result", { callId, name: funcName, result: dedupedResult });
+                  console.log(`[ToolExecutor] ${funcName} deduped (existing):`, dedupedResult);
+                  return { toolCall, funcName, funcArgs, callId, result: dedupedResult };
+                }
+
+                const inFlight = inFlightCreateByUrl.get(dedupKey);
+                if (inFlight) {
+                  const firstCreateResult = await inFlight;
+                  const firstTab = firstCreateResult && firstCreateResult.tab;
+                  if (firstTab && typeof firstTab.id === "number") {
+                    const switchResult = await ToolRegistry.execute("switch_tab", {
+                      tabId: firstTab.id,
+                    });
+                    const dedupedResult = {
+                      success: true,
+                      deduped: true,
+                      tab: firstTab,
+                      switch: switchResult,
+                      message: "Duplicate create_tab suppressed; reused in-flight tab.",
+                    };
+                    onUpdate("tool_result", { callId, name: funcName, result: dedupedResult });
+                    console.log(`[ToolExecutor] ${funcName} deduped (in-flight):`, dedupedResult);
+                    return { toolCall, funcName, funcArgs, callId, result: dedupedResult };
+                  }
+                }
+
+                const createPromise = ToolRegistry.execute(funcName, funcArgs);
+                inFlightCreateByUrl.set(dedupKey, createPromise);
+
+                let result;
+                try {
+                  result = await createPromise;
+                } finally {
+                  inFlightCreateByUrl.delete(dedupKey);
+                }
+
+                const resultKey = normalizeUrlForDedup(
+                  (result && result.tab && result.tab.url) || (funcArgs && funcArgs.url),
+                );
+                if (resultKey && result && !result.error && result.tab) {
+                  createdTabsByUrl.set(resultKey, result.tab);
+                }
+
+                onUpdate("tool_result", { callId, name: funcName, result });
+                console.log(`[ToolExecutor] ${funcName} result:`, result);
+                return { toolCall, funcName, funcArgs, callId, result };
+              }
+            }
+
             const result = await ToolRegistry.execute(funcName, funcArgs);
+
+            if (funcName === "create_tab") {
+              const resultKey = normalizeUrlForDedup(
+                (result && result.tab && result.tab.url) || (funcArgs && funcArgs.url),
+              );
+              if (resultKey && result && !result.error && result.tab) {
+                createdTabsByUrl.set(resultKey, result.tab);
+              }
+            }
+
             onUpdate("tool_result", { callId, name: funcName, result });
             console.log(`[ToolExecutor] ${funcName} result:`, result);
             return { toolCall, funcName, funcArgs, callId, result };

@@ -199,10 +199,10 @@ Located in `voice-server/`. A standalone Python process.
 
 ```
 PASSIVE mode (wake word):
-  Mic → VAD (Silero, 300ms silence) → faster-whisper (tiny.en, ~200ms) → regex match → ACTIVE
+  Mic → VAD (Silero, 300ms silence) → whisper.cpp (base.en + prompt conditioning) → regex match → ACTIVE
 
 ACTIVE mode (command):
-  Mic → VAD (Silero, 700ms silence) → faster-whisper (base.en, ~500ms) → command → PASSIVE
+  Mic → VAD (Silero, 700ms silence) → whisper.cpp (large-v3-turbo) → command → PASSIVE
 ```
 
 ### Components
@@ -222,7 +222,7 @@ ACTIVE mode (command):
 Uses **Silero VAD** (PyTorch, CPU-only, ~0.1ms per chunk):
 
 - Processes audio in chunks of exactly 512 samples (32ms at 16kHz) — required by Silero's streaming API
-- Tracks speech onset (minimum 250ms of speech before considering it real)
+- Tracks speech onset (minimum 100ms of speech before considering it real)
 - **Dynamic silence timeout**: 300ms in PASSIVE mode (wake word is short), 700ms in ACTIVE mode (commands have natural pauses)
 - `set_mode("passive"|"active")` switches the silence threshold at runtime
 - Includes trailing silence in the utterance for natural boundaries
@@ -231,16 +231,15 @@ Uses **Silero VAD** (PyTorch, CPU-only, ~0.1ms per chunk):
 
 #### `transcriber.py` — Whisper Transcription
 
-Uses **faster-whisper** (CTranslate2, in-process Python library) — ~4x faster than whisper.cpp:
+Uses **whisper.cpp** via subprocess for transcription:
 
-- **Dual-model setup**: both models loaded at startup for zero-latency switching
-  - `tiny.en` for PASSIVE mode (wake word detection — only needs to recognize 2 words)
-  - `base.en` for ACTIVE mode (accurate command transcription)
-- Runs in-process — no subprocess spawning, no temp files, no model reloading
-- Accepts float32 numpy arrays directly from VAD pipeline
-- Greedy decoding (`beam_size=1`) for maximum speed
+- **Dual-model setup**: selects model based on mode
+  - `base.en` for PASSIVE mode (wake word detection — with `--prompt` conditioning for "hey fox")
+  - `large-v3-turbo` for ACTIVE mode (high-accuracy command transcription)
+- Runs whisper-cli as subprocess, writes temp WAV file, reads output from `-otxt --output-file`
+- **Prompt conditioning**: In passive mode, passes `--prompt "hey fox"` to bias Whisper's decoder token probabilities toward the wake word, dramatically improving recognition accuracy
 - Rejects audio < 0.3s (noise clicks), truncates audio > 30s
-- Models auto-downloaded from Hugging Face on first use
+- Models are GGML format, downloaded via whisper.cpp's download script
 
 #### `state_machine.py` — Wake Word Detection
 
@@ -249,12 +248,12 @@ Two states: **PASSIVE** (listening for wake word) and **ACTIVE** (recording comm
 - Wake word is "hey fox" by default (configurable at runtime from extension)
 - Pre-compiles regex patterns that tolerate punctuation/whitespace: "hey fox" matches "hey, fox", "hey. fox", etc.
 - **Key feature**: If the wake word and command appear in the same utterance ("Hey fox, group my tabs"), extracts the command portion and processes it immediately — no second utterance needed
-- 10-second timeout in ACTIVE state; returns to PASSIVE if no command arrives
+- 20-second timeout in ACTIVE state; returns to PASSIVE if no command arrives
 - Supports manual trigger from extension (skip wake word)
 
 #### `config.py` — Centralized Configuration
 
-All tunable parameters: sample rate, VAD thresholds (passive/active), chunk sizes, Whisper models (passive/active), CTranslate2 compute type, wake words, WebSocket host/port, safety limits.
+All tunable parameters: sample rate, VAD thresholds (passive/active), chunk sizes, Whisper models (passive/active), whisper.cpp binary path, wake words, WebSocket host/port, safety limits.
 
 #### `ws_monitor.py` — Debugging Tool
 
@@ -268,7 +267,7 @@ Messages are JSON objects with a `type` field.
 
 | Type | Fields | When |
 |------|--------|------|
-| `status` | `vad`, `model`, `wake_word` | On client connect |
+| `status` | `vad`, `passive_model`, `active_model`, `wake_word` | On client connect |
 | `wake` | — | Wake word detected |
 | `listening` | — | Actively listening for command |
 | `command` | `text` | Transcribed command ready |
@@ -287,11 +286,11 @@ Messages are JSON objects with a `type` field.
 
 ```bash
 cd voice-server
-./setup.sh      # Installs Python deps, downloads Whisper models from Hugging Face
+./setup.sh      # Builds whisper.cpp, downloads GGML models, installs Python deps
 python3 server.py
 ```
 
-Dependencies: Python 3.8+, working microphone. No C/C++ compiler needed (faster-whisper uses pre-built CTranslate2 binaries). After initial setup, runs fully offline.
+Dependencies: Python 3.8+, CMake (to build whisper.cpp), working microphone. After initial setup, runs fully offline.
 
 ---
 
@@ -330,7 +329,7 @@ hack-nation/
     ├── server.py                       # Main server (audio capture + WS)
     ├── config.py                       # All configuration constants
     ├── state_machine.py                # PASSIVE/ACTIVE wake word state machine
-    ├── transcriber.py                  # faster-whisper dual-model transcriber
+    ├── transcriber.py                  # whisper.cpp dual-model transcriber
     ├── vad_detector.py                 # Silero VAD wrapper (dynamic silence timeout)
     ├── ws_monitor.py                   # WebSocket debugging tool
     ├── requirements.txt                # Python dependencies
@@ -348,7 +347,7 @@ hack-nation/
 
 4. **On-demand content extraction over persistent content scripts**: We only need page content when building context for a command, not continuously. `executeScript()` avoids running code on every page load.
 
-5. **faster-whisper over whisper.cpp**: CTranslate2-based in-process inference is ~4x faster than shelling out to whisper.cpp, eliminates subprocess startup + temp file overhead, and supports dual-model loading for zero-latency model switching between passive/active modes.
+5. **whisper.cpp with prompt conditioning**: Uses whisper.cpp via subprocess with dual GGML models (base.en for wake word, large-v3-turbo for commands). In passive mode, `--prompt "hey fox"` biases Whisper's decoder toward the wake word, significantly improving detection accuracy even with smaller models.
 
 6. **Silero VAD over WebRTC VAD**: Silero is significantly more accurate for speech detection, and the PyTorch overhead is negligible (~0.1ms per 32ms chunk).
 
