@@ -172,6 +172,60 @@ h1 {
   75% { transform: translateX(10px); }
 }
 
+/* ─── Idle Quick Start ─────────────────────────────── */
+
+.quick-start {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 12px;
+  z-index: 1;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: linear-gradient(180deg, rgba(129, 140, 248, 0.12), rgba(37, 39, 64, 0.75));
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.quick-start.active {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.quick-start-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.quick-start-subtitle {
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.quick-start-examples {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.quick-start-chip {
+  color: #cbd5ff;
+  font-size: 11px;
+  line-height: 1.25;
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: 1px solid rgba(129, 140, 248, 0.28);
+  background: rgba(26, 27, 46, 0.65);
+}
+
 /* ─── Command Text Display ─────────────────────────── */
 
 .command-text {

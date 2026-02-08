@@ -11,6 +11,7 @@
 
   const btnSettings = document.getElementById("btn-settings");
   const micIcon = document.getElementById("mic-icon");
+  const quickStart = document.getElementById("quick-start");
   const commandText = document.getElementById("command-text");
   const toolArea = document.getElementById("tool-area");
   const historyList = document.getElementById("history-list");
@@ -260,6 +261,7 @@
           // Show tools immediately (no transition delay on restore)
           micIcon.style.display = "none";
           micIcon.className = "mic-icon";
+          setQuickStartVisible(false);
           toolArea.classList.add("active");
           currentState = "processing";
         } else {
@@ -375,6 +377,11 @@
 
   // ─── State Management ──────────────────────────────────
 
+  function setQuickStartVisible(visible) {
+    if (!quickStart) return;
+    quickStart.classList.toggle("active", !!visible);
+  }
+
   function setState(newState) {
     if (currentState === newState) return;
     currentState = newState;
@@ -383,6 +390,7 @@
       // Hide mic immediately, show tool area after brief delay
       micIcon.style.display = "none";
       micIcon.className = "mic-icon";
+      setQuickStartVisible(false);
       setTimeout(() => {
         toolArea.classList.add("active");
       }, 100);
@@ -391,6 +399,7 @@
         // Tool results visible — keep them + command text, mic stays hidden
         micIcon.style.display = "none";
         micIcon.className = "mic-icon";
+        setQuickStartVisible(false);
         toolArea.classList.add("active");
       } else {
         // No tools — show mic, hide tool area + command text
@@ -398,6 +407,7 @@
         commandText.classList.remove("active");
         micIcon.style.display = "";
         micIcon.className = "mic-icon idle";
+        setQuickStartVisible(true);
       }
     } else if (newState === "wake" || newState === "listening") {
       // Voice session — show mic animation, hide tool area + command text
@@ -405,9 +415,11 @@
       commandText.classList.remove("active");
       micIcon.style.display = "";
       micIcon.className = `mic-icon ${newState}`;
+      setQuickStartVisible(false);
     } else if (newState === "error") {
       micIcon.style.display = "";
       micIcon.className = "mic-icon error";
+      setQuickStartVisible(false);
     }
   }
 
