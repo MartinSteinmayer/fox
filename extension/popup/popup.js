@@ -228,6 +228,7 @@
         return null;
 
       case "create_tab":
+        if (result.deduped) return "Reused existing tab";
         if (result.tab && result.tab.title) return `Opened "${result.tab.title.substring(0, 40)}"`;
         return null;
 

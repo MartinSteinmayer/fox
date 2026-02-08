@@ -142,6 +142,7 @@
         return null;
 
       case "create_tab":
+        if (result.deduped) return "Focused existing tab";
         if (result.tab && result.tab.title) {
           return `Opened "${String(result.tab.title).slice(0, 40)}"`;
         }

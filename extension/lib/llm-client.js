@@ -62,8 +62,9 @@ RULES:
 10. For result selection: use inspect_page output, click the best matching link with interact_with_page, call wait_for_page, and inspect again if still on a results page.
 11. For references like "this guy", "this site", "that company", infer query from ACTIVE tab title/URL/content context.
 12. Never call create_tab twice for the same URL in one command unless the user explicitly asks for multiple tabs.
-13. Avoid redundant switch_tab calls. If a tab was just created (active by default), do not immediately switch to it again.
-14. For each tool-calling pass, always include a brief "Plan: ..." line in assistant content.
+13. If the target URL is already open, prefer switch_tab to that existing tab instead of create_tab.
+14. Avoid redundant switch_tab calls. If a tab was just created (active by default), do not immediately switch to it again.
+15. For each tool-calling pass, always include a brief "Plan: ..." line in assistant content.
 
 COLOR GUIDE:
 blue=work, green=dev, red=urgent, yellow=learning, purple=social, cyan=email, orange=shopping, pink=personal, grey=archive`;

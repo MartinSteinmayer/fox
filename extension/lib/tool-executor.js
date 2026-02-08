@@ -543,12 +543,26 @@ ${groupSummary}`;
     const trimmed = url.trim();
     if (!trimmed) return null;
 
+    const stripWww = (host) => String(host || "").replace(/^www\./i, "");
+
+    function normalizeParsed(parsed) {
+      const protocol = parsed.protocol || "https:";
+      const host = stripWww(parsed.host || parsed.hostname).toLowerCase();
+      const path = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "");
+      return `${protocol}//${host}${path}${parsed.search || ""}`;
+    }
+
     try {
       const parsed = new URL(trimmed);
-      const path = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "");
-      return `${parsed.protocol}//${parsed.host}${path}${parsed.search}`;
+      return normalizeParsed(parsed);
     } catch (e) {
-      return trimmed.toLowerCase();
+      // Common command format from LLM/user: "youtube.com" or "www.youtube.com"
+      try {
+        const parsed = new URL(`https://${trimmed}`);
+        return normalizeParsed(parsed);
+      } catch (e2) {
+        return trimmed.toLowerCase().replace(/\/+$/, "");
+      }
     }
   }
 
@@ -620,6 +634,15 @@ ${groupSummary}`;
         args: {},
         result: listTabsResult,
       });
+
+      // Seed dedup map with already-open tabs so create_tab reuses them.
+      if (listTabsResult && Array.isArray(listTabsResult.tabs)) {
+        for (const tab of listTabsResult.tabs) {
+          const key = normalizeUrlForDedup(tab && tab.url);
+          if (!key || createdTabsByUrl.has(key)) continue;
+          createdTabsByUrl.set(key, tab);
+        }
+      }
     } catch (e) {
       if (isAbortError(e) || (signal && signal.aborted)) {
         return cancelledResult();
