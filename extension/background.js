@@ -90,6 +90,97 @@
     sendToPopup({ type: "status", status, wsConnected: state.wsConnected });
   }
 
+  function truncateText(text, maxLength) {
+    const str = String(text || "").trim();
+    if (!str) return "";
+    if (str.length <= maxLength) return str;
+    return str.slice(0, Math.max(0, maxLength - 3)).trimEnd() + "...";
+  }
+
+  function firstSentence(text) {
+    const str = String(text || "").trim();
+    if (!str) return "";
+    const match = str.match(/.+?[.!?](?:\s|$)/);
+    return match ? match[0].trim() : str;
+  }
+
+  function summarizeToolForNotification(toolCall) {
+    if (!toolCall || !toolCall.name) return null;
+    const result = toolCall.result;
+    if (!result || result.error) return null;
+
+    switch (toolCall.name) {
+      case "list_tabs":
+        if (typeof result.count === "number") return `${result.count} tabs found`;
+        if (Array.isArray(result.tabs)) return `${result.tabs.length} tabs found`;
+        return null;
+
+      case "close_tabs":
+        if (typeof result.closedCount === "number") return `Closed ${result.closedCount} tabs`;
+        return null;
+
+      case "close_duplicate_tabs":
+        if (typeof result.closedCount === "number") {
+          return result.closedCount > 0
+            ? `Removed ${result.closedCount} duplicates`
+            : "No duplicates found";
+        }
+        return null;
+
+      case "group_tabs":
+        if (result.group && result.group.title) return `Group "${result.group.title}" ready`;
+        return null;
+
+      case "create_tab":
+        if (result.tab && result.tab.title) {
+          return `Opened "${String(result.tab.title).slice(0, 40)}"`;
+        }
+        return "Opened new tab";
+
+      case "search_bookmarks":
+      case "search_history":
+        if (typeof result.count === "number") return `${result.count} results`;
+        return null;
+
+      default:
+        if (result.success) {
+          return `${String(toolCall.name).replace(/_/g, " ")} done`;
+        }
+        return null;
+    }
+  }
+
+  function buildCompletionSummary(response, error, toolCalls) {
+    if (error) {
+      return truncateText(String(error).replace(/^Error:\s*/i, ""), 180);
+    }
+
+    if (typeof response === "string" && response.trim()) {
+      return truncateText(firstSentence(response), 180);
+    }
+
+    if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+      const highlights = [];
+      for (let i = toolCalls.length - 1; i >= 0; i--) {
+        const line = summarizeToolForNotification(toolCalls[i]);
+        if (!line) continue;
+        highlights.unshift(line);
+        if (highlights.length >= 2) break;
+      }
+
+      if (highlights.length > 0) {
+        return truncateText(highlights.join(" | "), 180);
+      }
+
+      const failed = toolCalls.filter((tc) => tc && tc.result && tc.result.error).length;
+      const completed = Math.max(toolCalls.length - failed, 0);
+      if (failed > 0) return `${completed} steps done, ${failed} failed.`;
+      return `${toolCalls.length} step${toolCalls.length === 1 ? "" : "s"} completed.`;
+    }
+
+    return "Command completed.";
+  }
+
   // ─── Popup Communication ─────────────────────────────────
 
   function sendToPopup(message) {
@@ -263,25 +354,28 @@
         error: result.error || null,
       };
 
+      const completionSummary = buildCompletionSummary(
+        result.response,
+        result.error,
+        state.currentCommand.toolCalls,
+      );
+
       sendToPopup({
         type: "command_complete",
         commandId,
         response: result.response,
         toolCalls: state.currentCommand.toolCalls,
         error: result.error,
+        summary: completionSummary,
       });
 
       // Show notification if popup is closed
       if (!state.popupPort) {
-        const notifMessage = result.response
-          ? result.response.substring(0, 200)
-          : result.error || "Command completed";
-
         browser.notifications.create({
           type: "basic",
-          title: "Tab Whisperer",
-          message: notifMessage,
-          iconUrl: browser.runtime.getURL("icons/icon-48.png"),
+          title: result.error ? "fox: issue" : "fox: done",
+          message: completionSummary,
+          iconUrl: browser.runtime.getURL("icons/logo_wihtout_background.png"),
         });
       }
 
@@ -292,13 +386,30 @@
       return result;
     } catch (err) {
       const errorMsg = `Error: ${err.message}`;
+      const completionSummary = buildCompletionSummary(
+        null,
+        errorMsg,
+        state.currentCommand ? state.currentCommand.toolCalls : [],
+      );
+      const toolCalls = state.currentCommand ? state.currentCommand.toolCalls : [];
 
       sendToPopup({
         type: "command_complete",
         commandId,
         response: null,
+        toolCalls,
         error: errorMsg,
+        summary: completionSummary,
       });
+
+      if (!state.popupPort) {
+        browser.notifications.create({
+          type: "basic",
+          title: "fox: issue",
+          message: completionSummary,
+          iconUrl: browser.runtime.getURL("icons/logo_wihtout_background.png"),
+        });
+      }
 
       // Save error to action log
       state.actionLog.push({

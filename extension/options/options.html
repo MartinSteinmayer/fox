@@ -2,20 +2,22 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Tab Whisperer — Settings</title>
+    <title>fox — Settings</title>
+    <link rel="icon" type="image/png" href="../icons/logo_wihtout_background.png" />
     <style>
       :root {
-        --bg: #1a1b2e;
-        --bg-secondary: #232440;
-        --bg-tertiary: #2a2b4a;
-        --text: #e2e4f0;
-        --text-muted: #8b8da8;
-        --accent: #6366f1;
-        --accent-hover: #818cf8;
-        --green: #22c55e;
-        --red: #ef4444;
-        --border: #333560;
-        --radius: 8px;
+        --bg: #030916;
+        --bg-secondary: rgba(12, 21, 37, 0.92);
+        --bg-tertiary: #131f34;
+        --text: #edf0f4;
+        --text-muted: #9ca7b8;
+        --accent: #ef9654;
+        --accent-hover: #f4aa6e;
+        --accent-deep: #cc7332;
+        --green: #62c494;
+        --red: #e37076;
+        --border: #4f545f;
+        --radius: 10px;
       }
 
       * {
@@ -25,12 +27,23 @@
       }
 
       body {
-        font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        background: var(--bg);
+        font-family: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(
+            circle at 85% 10%,
+            rgba(239, 150, 84, 0.2),
+            transparent 32%
+          ),
+          radial-gradient(
+            circle at 10% 100%,
+            rgba(243, 244, 246, 0.08),
+            transparent 40%
+          ),
+          linear-gradient(160deg, #020816 0%, #061124 58%, #0b1a31 100%);
         color: var(--text);
-        padding: 40px;
-        max-width: 600px;
+        padding: 40px 28px 48px;
+        max-width: 640px;
+        min-height: 100vh;
         margin: 0 auto;
         line-height: 1.6;
       }
@@ -41,31 +54,40 @@
         display: flex;
         align-items: center;
         gap: 12px;
+        letter-spacing: 0.2px;
       }
 
       h1 img {
         width: 32px;
         height: 32px;
+        object-fit: contain;
+        filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.45));
       }
 
       .subtitle {
         color: var(--text-muted);
         font-size: 14px;
         margin-bottom: 32px;
+        max-width: 42ch;
       }
 
       .section {
-        background: var(--bg-secondary);
-        border: 1px solid var(--border);
+        background: linear-gradient(
+          180deg,
+          rgba(13, 23, 42, 0.95),
+          rgba(9, 17, 31, 0.95)
+        );
+        border: 1px solid rgba(79, 84, 95, 0.58);
         border-radius: var(--radius);
-        padding: 20px;
+        padding: 22px;
         margin-bottom: 20px;
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.24);
       }
 
       .section h2 {
         font-size: 16px;
         margin-bottom: 16px;
-        color: var(--text);
+        color: #f8d7bc;
       }
 
       .field {
@@ -95,8 +117,8 @@
       input[type="number"],
       select {
         width: 100%;
-        background: var(--bg-tertiary);
-        border: 1px solid var(--border);
+        background: rgba(9, 16, 30, 0.9);
+        border: 1px solid rgba(79, 84, 95, 0.62);
         color: var(--text);
         padding: 8px 12px;
         border-radius: var(--radius);
@@ -108,7 +130,7 @@
       input:focus,
       select:focus {
         border-color: var(--accent);
-        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+        box-shadow: 0 0 0 2px rgba(239, 150, 84, 0.22);
       }
 
       select {
@@ -131,8 +153,8 @@
       }
 
       button {
-        background: var(--accent);
-        color: white;
+        background: linear-gradient(180deg, var(--accent-hover), var(--accent));
+        color: #281507;
         border: none;
         padding: 10px 24px;
         border-radius: var(--radius);
@@ -140,20 +162,30 @@
         font-weight: 600;
         cursor: pointer;
         font-family: inherit;
+        transition:
+          transform 0.2s ease,
+          box-shadow 0.2s ease,
+          filter 0.2s ease;
+        box-shadow: 0 10px 20px rgba(204, 115, 50, 0.34);
       }
 
       button:hover {
-        background: var(--accent-hover);
+        transform: translateY(-1px);
+        filter: saturate(1.05);
+        box-shadow: 0 14px 22px rgba(204, 115, 50, 0.38);
       }
 
       button.secondary {
-        background: var(--bg-tertiary);
+        background: rgba(19, 31, 52, 0.85);
         color: var(--text-muted);
+        border: 1px solid rgba(79, 84, 95, 0.72);
+        box-shadow: none;
       }
 
       button.secondary:hover {
-        background: var(--border);
+        background: rgba(79, 84, 95, 0.34);
         color: var(--text);
+        box-shadow: none;
       }
 
       #status-message {
@@ -166,13 +198,15 @@
 
       #status-message.success {
         display: block;
-        background: #052e16;
+        background: rgba(98, 196, 148, 0.14);
+        border: 1px solid rgba(98, 196, 148, 0.28);
         color: var(--green);
       }
 
       #status-message.error {
         display: block;
-        background: #450a0a;
+        background: rgba(227, 112, 118, 0.14);
+        border: 1px solid rgba(227, 112, 118, 0.28);
         color: var(--red);
       }
 
@@ -187,17 +221,21 @@
         transform: translateY(-50%);
         background: none;
         border: none;
-        color: var(--text-muted);
+        color: #f8d7bc;
         cursor: pointer;
         padding: 4px;
         font-size: 12px;
+      }
+
+      .api-key-field .toggle-visibility:hover {
+        color: var(--accent-hover);
       }
     </style>
   </head>
   <body>
     <h1>
-      <img src="../icons/icon-48.png" alt="" />
-      Tab Whisperer Settings
+      <img src="../icons/logo_wihtout_background.png" alt="fox" />
+      fox Settings
     </h1>
     <p class="subtitle">
       Configure your AI assistant and voice server connection.

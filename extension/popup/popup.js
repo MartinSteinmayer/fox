@@ -14,6 +14,7 @@
   const quickStart = document.getElementById("quick-start");
   const commandText = document.getElementById("command-text");
   const toolArea = document.getElementById("tool-area");
+  const historyPanel = document.getElementById("history-panel");
   const historyList = document.getElementById("history-list");
   const historyCount = document.getElementById("history-count");
   const btnClearHistory = document.getElementById("btn-clear-history");
@@ -230,6 +231,54 @@
     }
   }
 
+  function truncateText(text, maxLength) {
+    const str = String(text || "").trim();
+    if (!str) return "";
+    if (str.length <= maxLength) return str;
+    return str.slice(0, Math.max(0, maxLength - 3)).trimEnd() + "...";
+  }
+
+  function firstSentence(text) {
+    const str = String(text || "").trim();
+    if (!str) return "";
+    const match = str.match(/.+?[.!?](?:\s|$)/);
+    return match ? match[0].trim() : str;
+  }
+
+  function buildCompletionSummary(response, toolCalls, error) {
+    if (error) {
+      return truncateText(String(error).replace(/^Error:\s*/i, ""), 160);
+    }
+
+    if (typeof response === "string" && response.trim()) {
+      return truncateText(firstSentence(response), 160);
+    }
+
+    if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+      const highlights = [];
+
+      for (let i = toolCalls.length - 1; i >= 0; i--) {
+        const tc = toolCalls[i];
+        if (!tc || !tc.name) continue;
+        const line = summarizeResult(tc.name, tc.result);
+        if (!line || /^Error:/i.test(line)) continue;
+        highlights.unshift(line);
+        if (highlights.length >= 2) break;
+      }
+
+      if (highlights.length > 0) {
+        return truncateText(highlights.join(" | "), 160);
+      }
+
+      const failed = toolCalls.filter((tc) => tc && tc.result && tc.result.error).length;
+      const completed = Math.max(toolCalls.length - failed, 0);
+      if (failed > 0) return `${completed} steps done, ${failed} failed.`;
+      return `${toolCalls.length} step${toolCalls.length === 1 ? "" : "s"} completed.`;
+    }
+
+    return "Command completed.";
+  }
+
   // ─── State ─────────────────────────────────────────────
 
   let port = null;
@@ -310,6 +359,7 @@
         // Only process completion for the current command
         if (msg.commandId && msg.commandId !== currentCommandId) break;
         removeThinkingIndicator();
+        addCompletionCard(msg.summary, msg.response, msg.toolCalls || [], msg.error);
         // Transition to idle but KEEP tool area visible until next command
         setState("idle");
 
@@ -391,7 +441,8 @@
 
   function setQuickStartVisible(visible) {
     if (!quickStart) return;
-    quickStart.classList.toggle("active", !!visible);
+    const shouldShow = !!visible && !(historyPanel && historyPanel.open);
+    quickStart.classList.toggle("active", shouldShow);
   }
 
   function setState(newState) {
@@ -580,6 +631,43 @@
     error.textContent = message;
     body.appendChild(error);
     refreshIterationStatus(body.closest(".timeline-iteration"));
+    scrollTimelineToBottom();
+  }
+
+  function addCompletionCard(summary, response, toolCalls, error) {
+    const existing = toolArea.querySelector(".completion-card");
+    if (existing) existing.remove();
+
+    const card = document.createElement("div");
+    card.className = "completion-card";
+    card.dataset.status = error ? "error" : "done";
+
+    const title = document.createElement("div");
+    title.className = "completion-title";
+    title.textContent = error ? "Needs attention" : "Done";
+    card.appendChild(title);
+
+    const summaryLine = document.createElement("div");
+    summaryLine.className = "completion-summary";
+    summaryLine.textContent = summary || buildCompletionSummary(response, toolCalls, error);
+    card.appendChild(summaryLine);
+
+    if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+      const failed = toolCalls.filter((tc) => tc && tc.result && tc.result.error).length;
+      const completed = Math.max(toolCalls.length - failed, 0);
+      const meta = document.createElement("div");
+      meta.className = "completion-meta";
+
+      if (failed > 0) {
+        meta.textContent = `${completed} done, ${failed} failed`;
+      } else {
+        meta.textContent = `${toolCalls.length} step${toolCalls.length === 1 ? "" : "s"} completed`;
+      }
+
+      card.appendChild(meta);
+    }
+
+    toolArea.appendChild(card);
     scrollTimelineToBottom();
   }
 
@@ -834,6 +922,13 @@
   btnSend.addEventListener("click", () => {
     sendTextCommand();
   });
+
+  if (historyPanel) {
+    historyPanel.addEventListener("toggle", () => {
+      const canShowQuickStart = currentState === "idle" && toolArea.children.length === 0;
+      setQuickStartVisible(canShowQuickStart);
+    });
+  }
 
   // ─── Init ─────────────────────────────────────────────
 

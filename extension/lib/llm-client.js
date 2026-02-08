@@ -24,7 +24,7 @@ var LLMClient = (function () {
 
   // ─── System Prompt ───────────────────────────────────────
 
-  const SYSTEM_PROMPT = `You are Tab Whisperer, a voice-controlled browser assistant. You act immediately and silently.
+  const SYSTEM_PROMPT = `You are fox, a voice-controlled browser assistant. You act immediately and silently.
 
 BEHAVIOR:
 - Execute actions, don't talk
