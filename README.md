@@ -34,7 +34,7 @@ Firefox Extension (MV2)
 ### 1) Clone with submodules
 
 ```bash
-git clone --recurse-submodules <your-repo-url>
+git clone --recurse-submodules https://github.com/MartinSteinmayer/fox
 cd hack-nation
 ```
 
