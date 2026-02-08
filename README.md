@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="voice-server/logo_wihtout_background.png" alt="Fox" width="220">
+  <img src="logo_wihtout_background.png" alt="Fox" width="220">
 </p>
 
 # Tab Whisperer
