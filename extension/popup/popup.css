@@ -369,13 +369,15 @@ h1 {
 }
 
 .timeline-step,
-.timeline-thinking {
+.timeline-thinking,
+.timeline-reasoning {
   display: flex;
   gap: 10px;
   align-items: stretch;
 }
 
-.timeline-step {
+.timeline-step,
+.timeline-reasoning {
   animation: step-slide-in 0.24s ease;
 }
 
@@ -412,8 +414,29 @@ h1 {
   opacity: 0.8;
 }
 
-.timeline-step:last-child .step-line {
+.iteration-body > :last-child .step-line {
   opacity: 0;
+}
+
+.reasoning-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 2px;
+  border: 2px solid var(--accent-bright);
+  background: rgba(129, 140, 248, 0.35);
+}
+
+.reasoning-content {
+  flex: 1;
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  background: rgba(99, 102, 241, 0.14);
+  color: #cfd2ff;
+  border-radius: 8px;
+  padding: 6px 10px 10px;
+  font-size: 11px;
+  line-height: 1.35;
+  font-style: italic;
 }
 
 .timeline-step[data-status="pending"] .step-dot {

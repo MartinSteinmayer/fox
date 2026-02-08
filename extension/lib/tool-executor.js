@@ -186,6 +186,93 @@ ${groupSummary}`;
     }
   }
 
+  // ─── Pass Reasoning ───────────────────────────────────────
+
+  const TOOL_REASONING_PHRASES = {
+    switch_tab: "focus the target tab",
+    close_tabs: "close selected tabs",
+    close_duplicate_tabs: "remove duplicate tabs",
+    group_tabs: "group related tabs",
+    ungroup_tabs: "ungroup selected tabs",
+    list_groups: "check existing tab groups",
+    move_tabs: "reorder tabs",
+    create_tab: "open the requested page",
+    reload_tabs: "reload selected tabs",
+    discard_tabs: "unload tabs from memory",
+    duplicate_tab: "duplicate a tab",
+    pin_tabs: "pin or unpin tabs",
+    mute_tabs: "mute or unmute tabs",
+    collapse_group: "collapse or expand a group",
+    update_group: "update a tab group",
+    web_search: "run a web search",
+    list_search_engines: "check available search engines",
+    search_bookmarks: "search bookmarks",
+    create_bookmark: "save a bookmark",
+    search_history: "search browsing history",
+    generate_report: "generate the report",
+    inspect_page: "inspect page controls",
+    interact_with_page: "interact with page elements",
+    wait_for_page: "wait for page load",
+  };
+
+  function cleanReasoningText(text) {
+    if (!text || typeof text !== "string") return null;
+    const normalized = text.replace(/\s+/g, " ").trim();
+    if (!normalized) return null;
+
+    let concise = normalized.split(/(?<=[.!?])\s+/)[0] || normalized;
+    concise = concise.trim();
+    if (!concise) return null;
+
+    // Filter out non-reasoning placeholders
+    if (/^\(?no response\)?$/i.test(concise)) return null;
+
+    // Keep a consistent timeline tone
+    if (!/^plan\s*:/i.test(concise)) {
+      concise = `Plan: ${concise}`;
+    }
+
+    // Strip markdown bullets/prefixes if model adds them
+    concise = concise.replace(/^plan\s*:\s*[-*]\s*/i, "Plan: ");
+
+    if (concise.length > 110) {
+      concise = concise.substring(0, 107).trimEnd() + "...";
+    }
+
+    if (!/[.!?]$/.test(concise)) {
+      concise += ".";
+    }
+
+    return concise;
+  }
+
+  function buildPassReasoning(parsedCalls, assistantContent) {
+    const explicit = cleanReasoningText(assistantContent);
+    if (explicit) return explicit;
+
+    const uniqueNames = [];
+    for (const call of parsedCalls) {
+      const name = call.funcName;
+      if (name === "list_tabs") continue;
+      if (!uniqueNames.includes(name)) uniqueNames.push(name);
+    }
+
+    if (uniqueNames.length === 0) return null;
+
+    const phrases = uniqueNames.map((name) => {
+      if (TOOL_REASONING_PHRASES[name]) return TOOL_REASONING_PHRASES[name];
+      return `run ${String(name).replace(/_/g, " ")}`;
+    });
+
+    if (phrases.length === 1) {
+      return `Plan: ${phrases[0]}.`;
+    }
+    if (phrases.length === 2) {
+      return `Plan: ${phrases[0]}, then ${phrases[1]}.`;
+    }
+    return `Plan: ${phrases[0]}, ${phrases[1]}, and ${phrases.length - 2} more.`;
+  }
+
   // ─── Auto Browser Follow-Up ──────────────────────────────
 
   /**
@@ -206,7 +293,10 @@ ${groupSummary}`;
 
     if (createdTabs.length === 0) return;
 
-    onUpdate("thinking", { message: "Inspecting new tabs..." });
+    const reasoning = createdTabs.length === 1
+      ? "Plan: verify the new page load and inspect available controls."
+      : `Plan: verify ${createdTabs.length} new pages and inspect their controls.`;
+    onUpdate("reasoning", { message: reasoning });
 
     const autoRuns = await Promise.all(
       createdTabs.map(async (tabId, index) => {
@@ -341,7 +431,7 @@ ${groupSummary}`;
    * 
    * @param {string} userText - The user's command text
    * @param {function} onUpdate - Callback for progress updates: (type, data) => void
-   *   type: "thinking" | "tool_call" | "tool_result" | "response" | "error"
+   *   type: "thinking" | "reasoning" | "tool_call" | "tool_result" | "response" | "error"
    * @param {Array} recentHistory - Last N action log entries for conversation context
    * @returns {Object} { response: string, toolCalls: Array, error?: string }
    */
@@ -445,8 +535,6 @@ ${groupSummary}`;
       });
     }
 
-    onUpdate("thinking", { message: "Sending to AI..." });
-
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       let assistantMessage;
 
@@ -463,7 +551,7 @@ ${groupSummary}`;
 
       // Check if LLM wants to call tools
       if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
-        // Fire all tool_call UI updates immediately so the popup shows them all at once
+        // Parse all tool calls first (without executing yet)
         const parsed = assistantMessage.tool_calls.map((toolCall) => {
           let funcArgs;
           try {
@@ -472,10 +560,20 @@ ${groupSummary}`;
             funcArgs = {};
           }
           const callId = nextCallId();
-          onUpdate("tool_call", { callId, name: toolCall.function.name, args: funcArgs });
-          console.log(`[ToolExecutor] Calling ${toolCall.function.name}(${JSON.stringify(funcArgs)})`);
           return { toolCall, funcName: toolCall.function.name, funcArgs, callId };
         });
+
+        // Add a concise "what I'm about to do" line for this pass
+        const reasoning = buildPassReasoning(parsed, assistantMessage.content);
+        if (reasoning) {
+          onUpdate("reasoning", { message: reasoning });
+        }
+
+        // Fire all tool_call UI updates immediately so the popup shows them all at once
+        for (const { funcName, funcArgs, callId } of parsed) {
+          onUpdate("tool_call", { callId, name: funcName, args: funcArgs });
+          console.log(`[ToolExecutor] Calling ${funcName}(${JSON.stringify(funcArgs)})`);
+        }
 
         // Execute all tools in parallel
         const toolResults = await Promise.all(
@@ -655,7 +753,6 @@ ${groupSummary}`;
           messages,
         );
 
-        onUpdate("thinking", { message: "Processing results..." });
         // Continue loop — LLM will process tool results
       } else {
         // LLM returned a text response — we're done

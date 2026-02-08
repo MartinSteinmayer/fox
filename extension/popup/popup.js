@@ -353,9 +353,15 @@
 
   function handleProgress(msg) {
     switch (msg.progressType) {
-      case "thinking":
+      case "reasoning":
         currentIteration += 1;
-        addThinkingIndicator(msg.message, currentIteration);
+        removeThinkingIndicator();
+        addReasoningStep(msg.message, currentIteration);
+        break;
+
+      case "thinking":
+        // Reserved for low-level executor state updates.
+        // We show explicit "reasoning" updates as pass headers instead.
         break;
 
       case "tool_call":
@@ -485,6 +491,36 @@
 
   function scrollTimelineToBottom() {
     toolArea.scrollTop = toolArea.scrollHeight;
+  }
+
+  function addReasoningStep(message, iteration) {
+    const targetIteration = typeof iteration === "number" ? iteration : currentIteration;
+    const body = getIterationBody(targetIteration);
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "timeline-reasoning";
+
+    const connector = document.createElement("div");
+    connector.className = "step-connector";
+
+    const dot = document.createElement("div");
+    dot.className = "reasoning-dot";
+
+    const line = document.createElement("div");
+    line.className = "step-line";
+
+    connector.appendChild(dot);
+    connector.appendChild(line);
+
+    const content = document.createElement("div");
+    content.className = "reasoning-content";
+    content.textContent = message || "Plan: decide the next actions.";
+
+    wrapper.appendChild(connector);
+    wrapper.appendChild(content);
+    body.appendChild(wrapper);
+    refreshIterationStatus(body.closest(".timeline-iteration"));
+    scrollTimelineToBottom();
   }
 
   function addThinkingIndicator(message, iteration) {
