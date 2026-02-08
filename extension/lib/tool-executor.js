@@ -323,6 +323,20 @@ ${groupSummary}`;
   }
 
   /**
+   * True if target tab is already active and its window is focused.
+   */
+  async function isTabAlreadyFocused(tabId) {
+    try {
+      const tab = await browser.tabs.get(tabId);
+      if (!tab || !tab.active) return false;
+      const win = await browser.windows.get(tab.windowId);
+      return !!(win && win.focused);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
    * Execute a single command through the LLM tool-calling loop.
    * 
    * @param {string} userText - The user's command text
@@ -337,6 +351,7 @@ ${groupSummary}`;
     const allToolCalls = [];
     const createdTabsByUrl = new Map();
     const inFlightCreateByUrl = new Map();
+    const inFlightSwitchByTab = new Map();
 
     // ─── Pre-run list_tabs instantly ────────────────────────
     // Fires UI updates immediately so it looks fast & responsive,
@@ -465,6 +480,56 @@ ${groupSummary}`;
         // Execute all tools in parallel
         const toolResults = await Promise.all(
           parsed.map(async ({ toolCall, funcName, funcArgs, callId }) => {
+            // Guardrail: suppress redundant switch_tab calls when the tab
+            // is already active/focused or an identical switch is in-flight.
+            if (funcName === "switch_tab") {
+              const tabId = funcArgs && funcArgs.tabId;
+              if (typeof tabId === "number") {
+                const alreadyFocused = await isTabAlreadyFocused(tabId);
+                if (alreadyFocused) {
+                  const noopResult = {
+                    success: true,
+                    skipped: true,
+                    alreadyFocused: true,
+                    tabId,
+                    message: "switch_tab skipped: tab already active and focused.",
+                  };
+                  onUpdate("tool_result", { callId, name: funcName, result: noopResult });
+                  console.log(`[ToolExecutor] ${funcName} noop (already focused):`, noopResult);
+                  return { toolCall, funcName, funcArgs, callId, result: noopResult };
+                }
+
+                const inFlightSwitch = inFlightSwitchByTab.get(tabId);
+                if (inFlightSwitch) {
+                  const firstSwitchResult = await inFlightSwitch;
+                  const dedupedSwitch = {
+                    success: true,
+                    deduped: true,
+                    tabId,
+                    switch: firstSwitchResult,
+                    message: "Duplicate switch_tab suppressed; reused in-flight switch.",
+                  };
+                  onUpdate("tool_result", { callId, name: funcName, result: dedupedSwitch });
+                  console.log(`[ToolExecutor] ${funcName} deduped (in-flight):`, dedupedSwitch);
+                  return { toolCall, funcName, funcArgs, callId, result: dedupedSwitch };
+                }
+
+                const switchPromise = ToolRegistry.execute(funcName, funcArgs);
+                inFlightSwitchByTab.set(tabId, switchPromise);
+
+                let switchResult;
+                try {
+                  switchResult = await switchPromise;
+                } finally {
+                  inFlightSwitchByTab.delete(tabId);
+                }
+
+                onUpdate("tool_result", { callId, name: funcName, result: switchResult });
+                console.log(`[ToolExecutor] ${funcName} result:`, switchResult);
+                return { toolCall, funcName, funcArgs, callId, result: switchResult };
+              }
+            }
+
             // Guardrail: suppress duplicate create_tab calls for the same URL
             // within a single command run. Re-focus existing tab instead.
             if (funcName === "create_tab") {
@@ -472,9 +537,17 @@ ${groupSummary}`;
               if (dedupKey) {
                 const existingTab = createdTabsByUrl.get(dedupKey);
                 if (existingTab && typeof existingTab.id === "number") {
-                  const switchResult = await ToolRegistry.execute("switch_tab", {
-                    tabId: existingTab.id,
-                  });
+                  const switchResult = await isTabAlreadyFocused(existingTab.id)
+                    ? {
+                        success: true,
+                        skipped: true,
+                        alreadyFocused: true,
+                        tabId: existingTab.id,
+                        message: "switch_tab skipped: tab already active and focused.",
+                      }
+                    : await ToolRegistry.execute("switch_tab", {
+                        tabId: existingTab.id,
+                      });
                   const dedupedResult = {
                     success: true,
                     deduped: true,
@@ -492,9 +565,17 @@ ${groupSummary}`;
                   const firstCreateResult = await inFlight;
                   const firstTab = firstCreateResult && firstCreateResult.tab;
                   if (firstTab && typeof firstTab.id === "number") {
-                    const switchResult = await ToolRegistry.execute("switch_tab", {
-                      tabId: firstTab.id,
-                    });
+                    const switchResult = await isTabAlreadyFocused(firstTab.id)
+                      ? {
+                          success: true,
+                          skipped: true,
+                          alreadyFocused: true,
+                          tabId: firstTab.id,
+                          message: "switch_tab skipped: tab already active and focused.",
+                        }
+                      : await ToolRegistry.execute("switch_tab", {
+                          tabId: firstTab.id,
+                        });
                     const dedupedResult = {
                       success: true,
                       deduped: true,

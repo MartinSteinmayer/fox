@@ -186,6 +186,12 @@
         if (typeof result.closedCount === "number") return `Closed ${result.closedCount} tabs`;
         return null;
 
+      case "switch_tab":
+        if (result.alreadyFocused) return "Already focused";
+        if (result.deduped) return "Reused switch";
+        if (result.success) return "Focused tab";
+        return null;
+
       case "close_duplicate_tabs":
         if (typeof result.closedCount === "number") {
           return result.closedCount > 0
